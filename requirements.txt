@@ -1,0 +1,34 @@
+# 只为记账-微信助手 (简约版) 依赖文件
+
+# 核心Web框架
+flask>=2.3.1
+requests>=2.26.0
+
+# PyQt6界面
+PyQt6>=6.4.0
+PyQt6-Qt6>=6.4.0
+
+# 系统监控和工具
+psutil>=5.9.8
+pyperclip>=1.9.0
+
+# 配置和加密
+python-dotenv>=0.19.0
+cryptography>=3.4.8
+
+# Windows相关（微信自动化需要）
+pywin32>=310
+comtypes>=1.4.0
+
+# 图像处理
+Pillow
+
+# 重试机制
+tenacity>=9.1.0
+
+# 类型提示
+typing-extensions>=4.0.0
+
+# 注意：wxauto或wxautox库需要单独安装
+wxauto
+wxautox
