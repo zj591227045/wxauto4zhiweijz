@@ -13,7 +13,12 @@ import base64
 import hashlib
 import sys
 
-logger = logging.getLogger(__name__)
+# 使用统一的日志系统
+try:
+    from app.logs import get_logger
+    logger = get_logger(__name__)
+except ImportError:
+    logger = logging.getLogger(__name__)
 
 @dataclass
 class AccountingConfig:

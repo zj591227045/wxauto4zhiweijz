@@ -11,7 +11,19 @@ import logging
 from typing import Dict, Set
 from PyQt6.QtCore import QObject, pyqtSignal
 
-logger = logging.getLogger(__name__)
+# 使用统一的日志系统
+try:
+    from app.logs import get_logger
+    logger = get_logger(__name__)
+except ImportError:
+    logger = logging.getLogger(__name__)
+
+# 导入异步消息记录器
+try:
+    from app.utils.async_message_recorder import AsyncMessageRecorderManager
+except ImportError:
+    logger.warning("无法导入异步消息记录器，将使用同步方式")
+    AsyncMessageRecorderManager = None
 
 class ZeroHistoryMonitor(QObject):
     """零历史消息监听服务 - 彻底解决历史消息问题"""
@@ -35,7 +47,15 @@ class ZeroHistoryMonitor(QObject):
 
         # 历史消息过滤器 - 记录启动时的消息ID
         self.startup_message_ids: Dict[str, Set[str]] = {}
-        
+
+        # 初始化异步消息记录器
+        if AsyncMessageRecorderManager:
+            self.async_recorder_manager = AsyncMessageRecorderManager(self)
+            self.async_recorder_manager.recording_finished.connect(self._on_async_recording_finished)
+            self.async_recorder_manager.progress_updated.connect(self._on_async_recording_progress)
+        else:
+            self.async_recorder_manager = None
+
         self._init_wx_instance()
         self._init_message_processor()
     
@@ -104,6 +124,45 @@ class ZeroHistoryMonitor(QObject):
             logger.info("消息处理器初始化成功")
         except Exception as e:
             logger.error(f"初始化消息处理器失败: {e}")
+
+    def _on_async_recording_finished(self, chat_name: str, success: bool, message: str, message_ids: set):
+        """异步记录完成回调"""
+        if success:
+            # 更新启动消息ID集合
+            self.startup_message_ids[chat_name] = message_ids
+            logger.info(f"异步历史消息记录完成: {chat_name} - {message}")
+
+            # 启动监控线程
+            self._start_monitoring_thread(chat_name)
+        else:
+            logger.error(f"异步历史消息记录失败: {chat_name} - {message}")
+            self.error_occurred.emit(f"历史消息记录失败: {message}")
+
+    def _on_async_recording_progress(self, chat_name: str, progress_message: str):
+        """异步记录进度回调"""
+        logger.info(f"异步记录进度 [{chat_name}]: {progress_message}")
+
+    def _start_monitoring_thread(self, chat_name: str):
+        """启动监控线程"""
+        try:
+            # 创建停止事件
+            stop_event = threading.Event()
+            self.stop_events[chat_name] = stop_event
+
+            # 启动监控线程
+            monitor_thread = threading.Thread(
+                target=self._monitor_loop,
+                args=(chat_name, stop_event),
+                daemon=True,
+                name=f"ZeroHistoryMonitor-{chat_name}"
+            )
+            monitor_thread.start()
+            self.monitor_threads[chat_name] = monitor_thread
+
+            logger.info(f"成功启动聊天监控线程: {chat_name}")
+        except Exception as e:
+            logger.error(f"启动监控线程失败: {e}")
+            self.error_occurred.emit(f"启动监控线程失败: {e}")
     
     def check_wechat_status(self) -> bool:
         """检查微信状态"""
@@ -162,58 +221,58 @@ class ZeroHistoryMonitor(QObject):
             return False
     
     def start_chat_monitoring(self, chat_name: str) -> bool:
-        """启动指定聊天对象的监控"""
+        """启动指定聊天对象的监控（异步版本）"""
         if not self.wx_instance:
             logger.error("微信实例未初始化")
             return False
-        
+
         if chat_name in self.monitor_threads and self.monitor_threads[chat_name].is_alive():
             logger.warning(f"聊天对象已在监控中: {chat_name}")
             return True
-        
+
         try:
             # 添加监听对象到微信
             try:
                 self.wx_instance.RemoveListenChat(chat_name)
             except:
                 pass
-            
+
             self.wx_instance.AddListenChat(chat_name)
             logger.info(f"已添加监听对象: {chat_name}")
-            
-            # 记录启动时的所有消息ID - 这是关键！
-            self._record_startup_messages(chat_name)
-            
-            # 创建停止事件
-            stop_event = threading.Event()
-            self.stop_events[chat_name] = stop_event
-            
-            # 启动监控线程
-            monitor_thread = threading.Thread(
-                target=self._monitor_loop,
-                args=(chat_name, stop_event),
-                daemon=True,
-                name=f"ZeroHistoryMonitor-{chat_name}"
-            )
-            monitor_thread.start()
-            self.monitor_threads[chat_name] = monitor_thread
-            
-            logger.info(f"成功启动聊天监控: {chat_name}")
-            return True
-        
+
+            # 使用异步方式记录启动时的所有消息ID
+            if self.async_recorder_manager:
+                logger.info(f"开始异步记录{chat_name}的历史消息...")
+                self.async_recorder_manager.start_recording(
+                    self.wx_instance,
+                    chat_name,
+                    max_attempts=3,  # 减少到3次
+                    interval=2       # 每2秒一次
+                )
+                # 异步记录完成后会通过回调启动监控线程
+                return True
+            else:
+                # 如果异步记录器不可用，使用同步方式（但会阻塞）
+                logger.warning("异步记录器不可用，使用同步方式记录历史消息")
+                self._record_startup_messages_sync(chat_name)
+
+                # 启动监控线程
+                self._start_monitoring_thread(chat_name)
+                return True
+
         except Exception as e:
             error_msg = f"启动聊天监控失败: {e}"
             logger.error(error_msg)
             self.error_occurred.emit(error_msg)
             return False
     
-    def _record_startup_messages(self, chat_name: str):
-        """记录启动时的所有消息ID，用于过滤历史消息"""
+    def _record_startup_messages_sync(self, chat_name: str):
+        """同步记录启动时的所有消息ID，用于过滤历史消息（备用方法）"""
         try:
-            logger.info(f"开始记录{chat_name}的启动时历史消息...")
+            logger.info(f"开始同步记录{chat_name}的启动时历史消息...")
 
-            # 设置足够长的延时，确保所有历史消息都被获取
-            max_attempts = 10  # 最多尝试10次
+            # 减少尝试次数和等待时间
+            max_attempts = 3  # 减少到3次
             total_messages = 0
 
             for attempt in range(max_attempts):
@@ -242,13 +301,14 @@ class ZeroHistoryMonitor(QObject):
                     logger.info(f"第{attempt + 1}次获取到空消息列表")
 
                 # 等待2秒再次获取，确保所有历史消息都被处理
-                time.sleep(2)
+                if attempt < max_attempts - 1:  # 最后一次不等待
+                    time.sleep(2)
 
             logger.info(f"历史消息记录完成，总计记录{len(self.startup_message_ids[chat_name])}条历史消息ID")
 
-            # 额外等待5秒，确保微信内部状态稳定
-            logger.info("等待5秒，确保微信内部状态稳定...")
-            time.sleep(5)
+            # 减少等待时间从5秒到2秒
+            logger.info("等待2秒，确保微信内部状态稳定...")
+            time.sleep(2)
             logger.info("历史消息处理完成，开始监控新消息")
 
         except Exception as e:
@@ -361,9 +421,19 @@ class ZeroHistoryMonitor(QObject):
                         self.accounting_result.emit(chat_name, success, result_msg)
                         logger.info(f"[{chat_name}] 记账结果: {'成功' if success else '失败'} - {result_msg}")
 
-                        # 发送回复到微信（如果记账成功且有回复内容）
-                        # 排除"聊天与记账无关"的情况
-                        if success and result_msg and not any(x in result_msg for x in ["聊天与记账无关", "信息与记账无关"]):
+                        # 发送回复到微信的逻辑：
+                        # 1. 如果是"信息与记账无关"，不发送回复
+                        # 2. 如果是记账成功，发送成功信息
+                        # 3. 如果是记账失败（token受限、网络错误等），发送错误信息
+                        should_send_reply = True
+
+                        # 检查是否与记账无关
+                        if "信息与记账无关" in result_msg:
+                            should_send_reply = False
+                            logger.info(f"[{chat_name}] 消息与记账无关，不发送回复: {result_msg}")
+
+                        # 发送回复到微信
+                        if should_send_reply and result_msg:
                             self._send_reply_to_wechat(chat_name, result_msg)
 
                     except Exception as e:
@@ -446,12 +516,17 @@ class ZeroHistoryMonitor(QObject):
             chat = self.wx_instance.listen[chat_name]
 
             # 使用聊天窗口对象发送消息
-            result = chat.SendMsg(message)
-            if result:
+            try:
+                result = chat.SendMsg(message)
+                logger.debug(f"[{chat_name}] SendMsg返回结果: {result} (类型: {type(result)})")
+
+                # wxauto的SendMsg方法可能返回不同类型的值
+                # 通常情况下，成功发送不会抛出异常，我们认为发送成功
                 logger.info(f"[{chat_name}] 发送回复成功: {message[:50]}...")
                 return True
-            else:
-                logger.warning(f"[{chat_name}] 发送回复失败: {message[:50]}...")
+
+            except Exception as send_error:
+                logger.warning(f"[{chat_name}] 发送回复失败: {send_error} - 消息: {message[:50]}...")
                 return False
 
         except Exception as e:

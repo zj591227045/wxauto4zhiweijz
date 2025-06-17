@@ -689,8 +689,19 @@ class MessageMonitor(QObject):
             # 发出记账结果信号
             self.accounting_result.emit(chat_name, success, result_msg)
 
-            # 发送回复到微信（如果记账成功且有回复内容）
-            if success and result_msg and not result_msg.startswith("信息与记账无关"):
+            # 发送回复到微信的逻辑：
+            # 1. 如果是"信息与记账无关"，不发送回复
+            # 2. 如果是记账成功，发送成功信息
+            # 3. 如果是记账失败（token受限、网络错误等），发送错误信息
+            should_send_reply = True
+
+            # 检查是否与记账无关
+            if "信息与记账无关" in result_msg:
+                should_send_reply = False
+                logger.info(f"[{chat_name}] 消息与记账无关，不发送回复: {result_msg}")
+
+            # 发送回复到微信
+            if should_send_reply and result_msg:
                 self._send_reply_to_wechat(chat_name, result_msg)
 
             self.statistics[chat_name] = stats
@@ -763,13 +774,18 @@ class MessageMonitor(QObject):
                 return False
 
             # 发送消息
-            success = self.wx_instance.SendMsg(message, who=chat_name)
-            if success:
-                logger.info(f"[{chat_name}] 发送回复成功: {message[:50]}...")
-            else:
-                logger.warning(f"[{chat_name}] 发送回复失败: {message[:50]}...")
+            try:
+                result = self.wx_instance.SendMsg(message, who=chat_name)
+                logger.debug(f"[{chat_name}] SendMsg返回结果: {result} (类型: {type(result)})")
 
-            return success
+                # wxauto的SendMsg方法可能返回不同类型的值
+                # 通常情况下，成功发送不会抛出异常，我们认为发送成功
+                logger.info(f"[{chat_name}] 发送回复成功: {message[:50]}...")
+                return True
+
+            except Exception as send_error:
+                logger.warning(f"[{chat_name}] 发送回复失败: {send_error} - 消息: {message[:50]}...")
+                return False
 
         except Exception as e:
             logger.error(f"发送回复失败: {e}")

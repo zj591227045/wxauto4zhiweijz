@@ -1,6 +1,10 @@
 """
-全新的简化消息监听服务
-只处理GetListenMessage返回的新消息，不涉及任何数据库对比逻辑
+纯净的消息监听服务
+只负责监听微信消息，不处理记账和回复逻辑
+职责：
+1. 监听微信消息
+2. 过滤和去重消息
+3. 发出消息接收信号
 """
 
 import threading
@@ -12,14 +16,13 @@ from PyQt6.QtCore import QObject, pyqtSignal
 logger = logging.getLogger(__name__)
 
 class CleanMessageMonitor(QObject):
-    """简化的消息监听服务"""
-    
+    """纯净的消息监听服务"""
+
     # 信号定义
-    message_received = pyqtSignal(str, str)  # chat_name, content
-    accounting_result = pyqtSignal(str, bool, str)  # chat_name, success, result_msg
+    message_received = pyqtSignal(str, str, str)  # chat_name, content, sender_name
     error_occurred = pyqtSignal(str)  # error_message
     status_changed = pyqtSignal(bool)  # is_running
-    
+
     def __init__(self):
         super().__init__()
         self.wx_instance = None
@@ -28,14 +31,10 @@ class CleanMessageMonitor(QObject):
         self.monitor_threads = {}
         self.stop_events = {}
         self.check_interval = 5  # 5秒检查一次
-        
+
         # 消息去重：记录已处理的消息内容
         self.processed_messages = {}  # chat_name -> Set[message_content]
-        
-        # 简化版消息处理器
-        from app.services.simple_message_processor import SimpleMessageProcessor
-        self.message_processor = SimpleMessageProcessor()
-        
+
         # 初始化微信
         self._init_wechat()
     
@@ -286,17 +285,9 @@ class CleanMessageMonitor(QObject):
                                     # 添加到已处理集合
                                     self.processed_messages[chat_name].add(message_key)
 
-                                    # 发出消息接收信号
-                                    self.message_received.emit(chat_name, content)
-
-                                    # 调用记账服务，传递发送者名称
-                                    try:
-                                        success, result_msg = self.message_processor.process_message(content, sender_name)
-                                        self.accounting_result.emit(chat_name, success, result_msg)
-                                        logger.info(f"[{chat_name}] 记账结果: {'成功' if success else '失败'} - {result_msg}")
-                                    except Exception as e:
-                                        logger.error(f"[{chat_name}] 记账处理失败: {e}")
-                                        self.accounting_result.emit(chat_name, False, f"记账处理失败: {e}")
+                                    # 发出消息接收信号（包含发送者信息）
+                                    self.message_received.emit(chat_name, content, sender_name)
+                                    logger.info(f"[{chat_name}] 发出消息接收信号: {sender_name} - {content[:50]}...")
                                 else:
                                     logger.debug(f"[{chat_name}] 跳过重复消息: {content}")
                             else:

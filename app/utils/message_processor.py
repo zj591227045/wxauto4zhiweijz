@@ -1003,6 +1003,7 @@ class MessageProcessor(QObject):
         
         # 检查消息内容判断是否与记账无关
         nothing_keywords = [
+            "信息与记账无关",
             "消息与记账无关",
             "无法识别记账信息",
             "不是记账相关消息",

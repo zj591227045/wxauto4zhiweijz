@@ -1,250 +1,133 @@
-# 只为记账-微信助手
+# 只为记账-微信助手 (简约版)
 
-一个基于wxauto的微信消息监控和自动记账工具，支持现代化的PyQt6图形界面。
-
-## ✨ 特性
-
-- 🎯 **智能消息监控** - 自动监控指定微信群/好友的消息
-- 📊 **自动记账** - 解析消息中的记账信息并自动提交到只为记账服务
-- 🖥️ **现代化界面** - 基于PyQt6的美观图形界面，支持简约模式和高级模式
-- 🔧 **灵活配置** - 支持多种启动方式和配置选项
-- 📝 **实时日志** - 彩色日志显示，便于调试和监控
-- 🔐 **安全配置** - 密码加密存储，配置文件自动保存
-- 🚀 **自动启动** - 支持启动时自动登录、启动API服务、初始化微信
-- ⚡ **简约模式** - 极简科技感界面，一键启动，专注核心功能
+这是只为记账-微信助手的简约版本，专注于核心功能：微信消息监控和自动记账。
 
 ## 🚀 快速开始
 
-### 环境要求
-
-- Python 3.8+
-- PyQt6
-- wxauto库
-- 微信PC版
-
-### 安装依赖
-
+### 1. 安装依赖
 ```bash
 pip install -r requirements.txt
 ```
 
-### 启动方式
-
-#### 方法1: 简约模式界面（推荐）
-
+### 2. 启动程序
 ```bash
-# 默认启动简约模式
-python main.py
-
-# 或者明确指定简约模式
-python main.py --service simple
-
-# 或者使用专用启动脚本
 python start_simple_ui.py
-
-# Windows用户可以双击
-start_simple_ui.bat
 ```
 
-#### 方法2: 高级模式界面
+## 📋 功能特性
 
-```bash
-# 启动高级模式
-python main.py --service advanced
+### 核心功能
+- ✅ 简约的PyQt6界面
+- ✅ 只为记账服务配置和登录
+- ✅ 微信监控服务配置
+- ✅ 实时日志窗口
+- ✅ 消息监控和自动记账
+- ✅ 统计信息显示
 
-# 或者使用原有启动脚本
-python start_qt_ui.py
+### 简约设计
+- 🎯 专注核心功能，去除复杂特性
+- 🔧 简化的配置流程
+- 📊 清晰的状态指示
+- 📝 实时日志监控
 
-# Windows用户可以双击
-start_qt_ui.bat
-```
+## 🔧 使用说明
 
-#### 方法3: 其他启动方式
+### 1. 配置只为记账服务
+1. 点击左上角的"只为记账服务"状态指示器
+2. 输入服务器地址（默认：https://api.zhiweijz.com）
+3. 输入用户名（邮箱）和密码
+4. 点击"登录"按钮
+5. 选择要使用的账本
 
-```bash
-# Web界面
-python main.py --service web
+### 2. 配置微信监控服务
+1. 点击右上角的"微信监控服务"状态指示器
+2. 选择微信自动化库（wxauto 或 wxautox）
+3. 添加要监控的微信联系人或群组
+4. 设置监控间隔（默认5秒）
+5. 配置自动启动选项
 
-# 仅API服务
-python main.py --service api
+### 3. 开始监控
+1. 确保微信PC客户端已登录
+2. 确保已完成上述配置
+3. 点击中央的"开始监听"按钮
+4. 系统会自动初始化微信和API服务
+5. 开始监控指定的微信会话
 
-# 传统方式
-python app_no_limiter.py
-```
+### 4. 查看日志
+- 点击底部的"日志窗口"按钮查看详细日志
+- 日志窗口支持实时更新和过滤功能
 
-## 🎨 界面模式
-
-### 简约模式 (推荐)
-- **极简设计**: 现代化深色主题，科技感十足
-- **圆形主控**: 120px圆形开始/停止按钮，支持渐变动画
-- **智能指示**: 实时状态闪烁指示灯，支持多种状态显示
-- **自动启动**: 程序启动时自动启动API服务、初始化微信、开始监控
-- **完整配置**: 支持wxauto库选择、监控会话配置、自动化选项
-- **快速配置**: 点击状态卡片即可打开详细配置对话框
-- **实时统计**: 处理消息数、成功记账数、失败记账数
-- **状态同步**: 与高级模式完全共享状态和配置
-- **一键切换**: 可随时切换到高级模式
-
-### 高级模式
-- **完整功能**: 所有配置选项和高级功能
-- **实时日志**: 详细的日志显示和管理
-- **调试工具**: 适合开发和调试使用
-- **返回简约**: 可随时返回简约模式
-
-## 📁 项目结构
+## 📁 项目结构（简约版）
 
 ```
-wxauto_for_zhiweijz/
-├── main.py                # 主入口（支持多种模式）
-├── start_simple_ui.py     # 简约模式启动器
-├── start_simple_ui.bat    # Windows简约模式启动
-├── start_qt_ui.py         # 高级模式启动器
-├── start_qt_ui.bat        # Windows高级模式启动
-├── test_simple_ui.py      # 简约模式测试
-├── app_no_limiter.py      # 无限流器API服务
-├── requirements.txt       # 项目依赖
-├── README.md             # 项目说明
-├── app/                  # 核心应用代码
-│   ├── qt_ui/           # PyQt6界面
-│   │   ├── simple_main_window.py    # 简约模式界面
-│   │   ├── main_window_with_startup.py  # 高级模式界面
-│   │   └── main_window_fixed.py    # 基础界面组件
-│   ├── api/             # API服务
-│   ├── services/        # 业务服务
-│   ├── wxauto_wrapper/  # wxauto库包装器
-│   └── utils/           # 工具模块
-├── docs/                # 项目文档
-│   ├── README_SIMPLE.md # 简约模式说明
-│   └── README_QT.md     # 高级模式说明
-├── tests/               # 测试文件
-├── archive/             # 归档文件
-├── data/                # 数据文件
-├── logs/                # 日志文件
-└── wxauto/             # wxauto库源码
+├── start_simple_ui.py              # 简约版启动脚本
+├── requirements.txt                # 依赖文件
+├── README_SIMPLE.md               # 简约版说明文档
+├── app/                           # 核心应用目录
+│   ├── qt_ui/                     # PyQt6界面
+│   │   ├── simple_main_window.py  # 简约版主窗口
+│   │   └── log_window.py          # 日志窗口
+│   ├── services/                  # 核心服务
+│   │   ├── accounting_service.py  # 记账服务
+│   │   └── message_monitor.py     # 消息监控服务
+│   ├── utils/                     # 工具模块
+│   │   ├── config_manager.py      # 配置管理
+│   │   ├── state_manager.py       # 状态管理
+│   │   └── message_processor.py   # 消息处理器
+│   ├── api/                       # API接口
+│   │   ├── routes.py              # 主要API路由
+│   │   ├── routes_minimal.py      # 精简API路由
+│   │   ├── chat_window.py         # 聊天窗口API
+│   │   └── message_api.py         # 消息API
+│   ├── api_service.py             # API服务
+│   ├── auth.py                    # API认证
+│   ├── config.py                  # 配置文件
+│   ├── logs.py                    # 日志系统
+│   ├── wechat.py                  # 微信管理器
+│   ├── wechat_adapter.py          # 微信适配器
+│   └── wechat_init.py             # 微信初始化
+└── archive/                       # 已归档的文件
+    ├── 其他UI版本文件
+    ├── 测试文件
+    ├── 工具文件
+    └── 不必要的组件
 ```
 
-## 🎯 使用说明
+## ⚙️ 配置说明
 
-### 简约模式使用流程
+### 只为记账API配置
+- 服务器地址：https://api.zhiweijz.com
+- 需要有效的用户账号和密码
+- 支持多账本选择
 
-1. **启动应用**
-   ```bash
-   python main.py  # 默认启动简约模式
-   ```
+### 微信监控配置
+- 支持wxauto和wxautox两种库
+- 可监控多个微信联系人或群组
+- 可配置监控间隔和自动启动
 
-2. **配置服务**
-   - 点击"只为记账服务"状态卡片，配置服务器地址、用户名、密码
-   - 点击"微信监控服务"状态卡片，设置监控间隔和会话
-
-3. **开始监控**
-   - 确保微信PC版已登录
-   - 点击中央圆形"开始监听"按钮
-   - 观察状态指示灯变为绿色并闪烁
-
-4. **查看统计**
-   - 底部实时显示处理消息数、成功记账数、失败记账数
-
-5. **切换模式**
-   - 点击右下角"高级模式"按钮可切换到完整界面
-
-### 高级模式使用流程
-
-1. **启动应用**
-   ```bash
-   python main.py --service advanced
-   ```
-
-2. **配置记账服务**
-   - 服务器地址：`https://api.zhiweijz.com`
-   - 输入用户名和密码
-   - 选择要使用的账本
-
-3. **配置微信监控**
-   - 添加要监控的微信群名或好友名
-   - 设置检查间隔（建议5秒）
-   - 点击"开始监控"
-
-4. **启动API服务**
-   - 在界面中点击"启动API服务"
-
-5. **初始化微信连接**
-   - 点击"初始化微信"按钮，确保微信PC版已登录
-
-6. **返回简约模式**
-   - 点击状态栏右侧"返回简约模式"按钮
-
-## 🔧 配置说明
-
-### API端点
-
-- `GET /health` - 健康检查
-- `GET /api/info` - API信息
-- `GET /api/wechat/status` - 微信状态
-- `POST /api/wechat/initialize` - 微信初始化
-
-### 环境变量
-
-- `WECHAT_LIB` - 微信库选择（wxauto/wxautox）
-- `PORT` - API服务端口（默认5000）
-- `WXAUTO_NO_MUTEX_CHECK` - 禁用互斥锁检查
-
-## 📚 文档
-
-详细文档请查看 `docs/` 目录：
-
-- [简约模式说明](docs/README_SIMPLE.md) - 简约模式详细使用指南
-- [高级模式说明](docs/README_QT.md) - 高级模式详细使用指南
-- [配置管理使用指南](docs/CONFIG_USAGE_GUIDE.md)
-- [界面布局优化总结](docs/LAYOUT_OPTIMIZATION_SUMMARY.md)
-- [最终使用指南](docs/FINAL_USAGE_GUIDE.md)
-- [Flask-Limiter修复总结](docs/FLASK_LIMITER_FIX_SUMMARY.md)
-- [API服务修复总结](docs/API_SERVICE_FIX_SUMMARY.md)
-- [实现总结](docs/IMPLEMENTATION_SUMMARY.md)
-
-## 🐛 故障排除
+## 🔍 故障排除
 
 ### 常见问题
+1. **微信初始化失败**
+   - 确保微信PC客户端已登录
+   - 检查wxauto/wxautox库是否正确安装
 
-1. **PyQt6导入失败**
-   ```bash
-   pip install PyQt6
-   ```
+2. **记账服务连接失败**
+   - 检查网络连接
+   - 验证服务器地址和登录信息
 
-2. **简约模式界面无法启动**
-   - 运行测试脚本：`python test_simple_ui.py`
-   - 检查PyQt6是否正确安装
-
-3. **Flask-Limiter错误**
-   - 使用 `app_no_limiter.py` 而不是旧的启动方式
-
-4. **wxauto库导入失败**
-   - 确保wxauto库已正确安装
-   - 检查Python路径配置
-
-5. **微信连接失败**
-   - 确保微信PC版已登录
-   - 尝试重新初始化微信连接
-
-6. **端口占用**
-   - 检查端口5000是否被占用
-   - 使用不同端口或终止占用进程
+3. **监控无法启动**
+   - 确保已配置监控对象
+   - 确保已登录记账服务并选择账本
 
 ### 日志查看
+- 使用日志窗口查看详细的运行信息
+- 日志文件保存在 `logs/simple_ui.log`
 
-- 简约模式：`logs/simple_ui.log`
-- 高级模式：界面内实时日志显示 + `logs/qt_ui.log`
-- API服务：控制台输出
+## 📞 支持
 
-## 🤝 贡献
+如有问题，请查看日志文件或联系技术支持。
 
-欢迎提交Issue和Pull Request！
+---
 
-## 📄 许可证
-
-本项目采用MIT许可证。
-
-## 🙏 致谢
-
-- [wxauto](https://github.com/cluic/wxauto) - 微信自动化库
-- [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) - 图形界面框架
-- [Flask](https://flask.palletsprojects.com/) - Web框架
+**注意：** 这是简约版本，如需更多高级功能，请使用完整版本。

@@ -25,6 +25,10 @@ sys.path.insert(0, project_root)
 # 导入状态管理器
 from app.utils.state_manager import state_manager
 
+# 导入异步HTTP工具
+from app.utils.async_wechat_api import AsyncWechatAPI
+from app.utils.async_wechat_worker import AsyncWechatManager
+
 # 延迟导入消息监控服务，避免Flask依赖
 # from app.services.message_monitor import MessageMonitor
 # from app.services.accounting_service import AccountingService
@@ -1051,7 +1055,15 @@ class SimpleMainWindow(QMainWindow):
         # 初始化状态变量
         self._monitoring_starting = False
         self._initialization_complete = False  # 添加初始化完成标志
-        
+
+        # 初始化异步微信API
+        self.async_wechat_api = AsyncWechatAPI(parent=self)
+        self.setup_async_wechat_connections()
+
+        # 初始化异步微信工作器
+        self.async_wechat_manager = AsyncWechatManager(parent=self)
+        self.setup_async_wechat_worker_connections()
+
         # 设置UI
         self.setup_ui()
         
@@ -1197,6 +1209,18 @@ class SimpleMainWindow(QMainWindow):
         
         main_layout.addLayout(bottom_layout)
     
+    def setup_async_wechat_connections(self):
+        """设置异步微信API连接"""
+        self.async_wechat_api.wechat_initialized.connect(self.on_async_wechat_initialized)
+        self.async_wechat_api.wechat_status_checked.connect(self.on_async_wechat_status_checked)
+        self.async_wechat_api.listener_added.connect(self.on_async_listener_added)
+        self.async_wechat_api.messages_received.connect(self.on_async_messages_received)
+
+    def setup_async_wechat_worker_connections(self):
+        """设置异步微信工作器连接"""
+        self.async_wechat_manager.operation_finished.connect(self.on_async_wechat_operation_finished)
+        self.async_wechat_manager.progress_updated.connect(self.on_async_wechat_progress_updated)
+
     def setup_state_connections(self):
         """设置状态连接"""
         # 连接状态管理器的回调
@@ -1229,6 +1253,128 @@ class SimpleMainWindow(QMainWindow):
         
         # 延迟加载真实统计数据（等待消息监控器初始化完成）
         QTimer.singleShot(1000, self.update_real_statistics)
+
+    def on_async_wechat_initialized(self, success: bool, message: str, data: dict):
+        """异步微信初始化完成回调"""
+        if success:
+            window_name = data.get('data', {}).get('window_name', '微信')
+            print(f"✓ 异步微信初始化成功: {window_name}")
+            state_manager.update_wechat_status(
+                status='online',
+                window_name=window_name
+            )
+            # 如果是在初始化流程中，继续下一步
+            if hasattr(self, '_in_initialization') and self._in_initialization:
+                self.on_wechat_init_success_for_init(window_name)
+        else:
+            print(f"✗ 异步微信初始化失败: {message}")
+            state_manager.update_wechat_status(
+                status='error',
+                error_message=message
+            )
+            # 如果是在初始化流程中，标记失败
+            if hasattr(self, '_in_initialization') and self._in_initialization:
+                self.initialization_failed(message)
+
+    def on_async_wechat_status_checked(self, success: bool, message: str, data: dict):
+        """异步微信状态检查完成回调"""
+        if success:
+            status = data.get('data', {}).get('status', 'unknown')
+            print(f"✓ 异步微信状态检查成功: {status}")
+            if status == 'connected':
+                # 微信已连接，继续监控流程
+                if hasattr(self, '_in_monitoring_start') and self._in_monitoring_start:
+                    self.add_listeners_step()
+            else:
+                # 微信未连接，需要初始化
+                if hasattr(self, '_in_monitoring_start') and self._in_monitoring_start:
+                    self.update_progress("初始化微信中...")
+                    self._in_initialization = True
+                    self.async_wechat_api.initialize_wechat()
+        else:
+            print(f"✗ 异步微信状态检查失败: {message}")
+            # 状态检查失败，尝试初始化微信
+            if hasattr(self, '_in_monitoring_start') and self._in_monitoring_start:
+                self.update_progress("初始化微信中...")
+                self._in_initialization = True
+                self.async_wechat_api.initialize_wechat()
+
+    def on_async_listener_added(self, success: bool, message: str, who: str):
+        """异步监听器添加完成回调"""
+        if success:
+            print(f"✓ 异步添加监听对象成功: {who}")
+        else:
+            print(f"✗ 异步添加监听对象失败: {who} - {message}")
+
+    def on_async_messages_received(self, success: bool, message: str, messages: dict):
+        """异步消息接收回调"""
+        if success and messages:
+            print(f"✓ 异步接收到消息: {len(messages)} 个对象")
+            # 这里可以处理接收到的消息
+        else:
+            print(f"异步消息接收: {message}")
+
+    def on_async_wechat_operation_finished(self, operation: str, success: bool, message: str, data: dict):
+        """异步微信操作完成回调"""
+        print(f"异步微信操作完成: {operation} - {'成功' if success else '失败'}: {message}")
+
+        if operation == "init_message_processor":
+            if success:
+                # 获取初始化的组件
+                self.accounting_service = data.get('accounting_service')
+                self.message_monitor = data.get('message_monitor')
+                print("✓ 异步消息处理器初始化成功")
+
+                # 连接信号（如果是ZeroHistoryMonitor）
+                if self.message_monitor and hasattr(self.message_monitor, 'message_received'):
+                    try:
+                        self.message_monitor.message_received.connect(self._on_message_received)
+                        self.message_monitor.accounting_result.connect(self._on_accounting_result)
+                        self.message_monitor.status_changed.connect(self._on_monitoring_status_changed)
+                        self.message_monitor.error_occurred.connect(self._on_monitor_error)
+                        print("✓ 消息监控器信号连接成功")
+                    except Exception as e:
+                        print(f"连接消息监控器信号失败: {e}")
+
+                # 继续监控流程
+                if hasattr(self, '_in_monitoring_start') and self._in_monitoring_start:
+                    self.check_wechat_and_start_monitoring()
+            else:
+                print(f"✗ 异步消息处理器初始化失败: {message}")
+                self.monitoring_failed(f"消息处理器初始化失败: {message}")
+
+        elif operation == "start_chat_monitoring":
+            if success:
+                success_count = data.get('success_count', 0)
+                total_count = data.get('total_count', 0)
+                print(f"✓ 异步聊天监控启动成功: {success_count}/{total_count}")
+                self.monitoring_success()
+            else:
+                print(f"✗ 异步聊天监控启动失败: {message}")
+                self.monitoring_failed(f"聊天监控启动失败: {message}")
+
+        elif operation == "add_chat_target":
+            if success:
+                success_count = data.get('success_count', 0)
+                total_count = data.get('total_count', 0)
+                print(f"✓ 异步添加监控目标成功: {success_count}/{total_count}")
+                # 继续启动监控
+                if hasattr(self, '_in_monitoring_start') and self._in_monitoring_start:
+                    self.start_listening_step_async()
+            else:
+                print(f"✗ 异步添加监控目标失败: {message}")
+                self.monitoring_failed(f"添加监控目标失败: {message}")
+
+        elif operation == "stop_monitoring":
+            if success:
+                print("✓ 异步停止监控成功")
+            else:
+                print(f"✗ 异步停止监控失败: {message}")
+
+    def on_async_wechat_progress_updated(self, operation: str, progress_message: str):
+        """异步微信操作进度更新回调"""
+        print(f"异步微信操作进度 [{operation}]: {progress_message}")
+        self.update_progress(progress_message)
     
     def on_accounting_service_changed(self, config: dict):
         """只为记账服务状态变化"""
@@ -1685,100 +1831,59 @@ class SimpleMainWindow(QMainWindow):
             self.monitoring_failed(f"等待API服务就绪失败: {str(e)}")
     
     def check_wechat_status_and_continue(self):
-        """检查微信状态并继续"""
+        """检查微信状态并继续（异步版本）"""
         try:
-            import requests
-            
-            # 检查微信状态
-            try:
-                response = requests.get("http://localhost:5000/api/wechat/status", timeout=3)
-                if response.status_code == 200:
-                    result = response.json()
-                    if result.get('code') == 0 and result.get('data', {}).get('status') == 'connected':
-                        print("✓ 微信已连接")
-                        # 微信已连接，直接添加监听对象
-                        self.add_listeners_step()
-                    else:
-                        # 微信未连接，需要初始化
-                        self.update_progress("初始化微信中...")
-                        self.initialize_wechat_and_wait()
-                else:
-                    # 微信状态异常，需要初始化
-                    self.update_progress("初始化微信中...")
-                    self.initialize_wechat_and_wait()
-            except requests.exceptions.RequestException:
-                # 无法获取微信状态，需要初始化
-                self.update_progress("初始化微信中...")
-                self.initialize_wechat_and_wait()
-                
+            print("开始异步检查微信状态...")
+            self.update_progress("检查微信状态中...")
+
+            # 设置监控启动标志
+            self._in_monitoring_start = True
+
+            # 使用异步API检查微信状态
+            self.async_wechat_api.check_wechat_status()
+
         except Exception as e:
             self.monitoring_failed(f"检查微信状态失败: {str(e)}")
-    
+
     def initialize_wechat_and_wait(self):
-        """初始化微信并等待"""
+        """初始化微信并等待（异步版本）"""
         try:
-            import requests
-            api_key = "test-key-2"
-            response = requests.post(
-                "http://localhost:5000/api/wechat/initialize",
-                headers={"X-API-Key": api_key},
-                timeout=30
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                if result.get('code') == 0:
-                    print("✓ 微信初始化成功")
-                    # 微信初始化成功，继续添加监听对象
-                    self.add_listeners_step()
-                else:
-                    self.monitoring_failed(f"微信初始化失败: {result.get('message')}")
-            else:
-                self.monitoring_failed(f"微信初始化失败: HTTP {response.status_code}")
-                
+            print("开始异步初始化微信...")
+            self.update_progress("初始化微信中...")
+
+            # 设置初始化标志
+            self._in_initialization = True
+
+            # 使用异步API初始化微信
+            self.async_wechat_api.initialize_wechat()
+
         except Exception as e:
             self.monitoring_failed(f"微信初始化异常: {str(e)}")
     
     def add_listeners_step(self):
-        """添加监听对象步骤"""
+        """添加监听对象步骤（异步版本）"""
         try:
             self.update_progress("添加监听对象中...")
-            
+
             # 检查消息监控器
             if not self.message_monitor:
                 self.monitoring_failed("消息监控器未初始化")
                 return
-            
+
             # 获取监控会话列表
             monitoring_config = state_manager.get_monitoring_status()
             monitored_chats = monitoring_config.get('monitored_chats', [])
-            
+
             if not monitored_chats:
                 # 如果没有配置监控会话，使用默认会话
                 monitored_chats = ["张杰"]
                 print("没有配置监控会话，使用默认会话: 张杰")
-            
+
             print(f"监控聊天列表: {monitored_chats}")
-            
-            # 添加聊天对象到消息监控器
-            success_count = 0
-            for chat_name in monitored_chats:
-                print(f"正在添加监控目标: {chat_name}")
-                try:
-                    # 使用MessageMonitor添加聊天对象
-                    if self.message_monitor.add_chat_target(chat_name):
-                        success_count += 1
-                        print(f"✓ 成功添加监控目标: {chat_name}")
-                    else:
-                        print(f"监控目标已存在: {chat_name}")
-                        success_count += 1  # 已存在也算成功
-                except Exception as e:
-                    print(f"添加监控目标失败 {chat_name}: {e}")
-                    # 继续处理其他目标
-            
-            # 等待一下让添加操作完成
-            QTimer.singleShot(1000, lambda: self.start_listening_step_delayed(success_count))
-                
+
+            # 使用异步微信工作器添加聊天目标
+            self.async_wechat_manager.add_chat_targets(self.message_monitor, monitored_chats)
+
         except Exception as e:
             self.monitoring_failed(f"添加监听对象失败: {str(e)}")
     
@@ -2044,37 +2149,45 @@ class SimpleMainWindow(QMainWindow):
             print(f"更新真实统计数据失败: {e}")
     
     def check_service_status(self):
-        """检查服务状态"""
+        """检查服务状态（异步版本）"""
         try:
-            # 检查API服务状态
+            # 检查API服务状态 - 使用异步方式
             api_config = state_manager.get_api_status()
             if api_config.get('status') == 'running':
                 port = api_config.get('port', 5000)
-                
-                # 检查API服务是否真的在运行
-                try:
-                    import requests
-                    response = requests.get(f"http://localhost:{port}/api/health", timeout=2)
-                    if response.status_code != 200:
-                        state_manager.update_api_status(status='error', error_message='API服务无响应')
-                except:
+
+                # 使用异步HTTP管理器检查API服务
+                from app.utils.async_http import async_http_manager
+
+                def on_health_check_success(data):
+                    print("✓ API服务健康检查成功")
+
+                def on_health_check_error(error_msg):
+                    print(f"✗ API服务健康检查失败: {error_msg}")
                     state_manager.update_api_status(status='error', error_message='API服务连接失败')
-            
-            # 检查微信状态
+
+                async_http_manager.get(
+                    f"http://localhost:{port}/api/health",
+                    timeout=2,
+                    success_callback=on_health_check_success,
+                    error_callback=on_health_check_error
+                )
+
+            # 检查微信状态 - 保持原有逻辑
             wechat_config = state_manager.get_wechat_status()
             if wechat_config.get('status') == 'online':
                 # 可以在这里添加微信状态检查逻辑
                 pass
-            
+
             # 检查只为记账服务状态
             accounting_status = state_manager.get_accounting_service_status()
-            
+
             accounting_active = accounting_status.get('status') == 'connected' or accounting_status.get('is_logged_in', False)
-            
+
             # 更新指示器状态
             if hasattr(self, 'accounting_indicator'):
                 self.accounting_indicator.set_active(accounting_active)
-            
+
         except Exception as e:
             print(f"检查服务状态失败: {e}")
     
@@ -2193,29 +2306,35 @@ class SimpleMainWindow(QMainWindow):
             print(f"保存{config_type}配置")
     
     def open_log_window(self):
-        """打开日志窗口"""
+        """打开增强的日志窗口"""
         try:
-            print("正在打开日志窗口...")
-            
-            # 创建独立的日志窗口（不设置父窗口）
+            print("正在打开增强日志窗口...")
+
+            # 创建独立的增强日志窗口（不设置父窗口）
+            from app.qt_ui.log_window import LogWindow
             self.log_window = LogWindow()
-            
+
             # 设置窗口为独立窗口
             self.log_window.setWindowFlags(Qt.WindowType.Window)
-            
+
             # 显示日志窗口
             self.log_window.show()
-            
+
             # 将窗口置于前台
             self.log_window.raise_()
             self.log_window.activateWindow()
-            
-            print("日志窗口已打开")
-            
+
+            print("✓ 增强日志窗口已打开")
+
+            # 记录日志窗口打开事件
+            from app.logs import logger
+            logger.info("用户打开了增强日志窗口")
+
         except Exception as e:
             print(f"打开日志窗口失败: {e}")
             import traceback
             traceback.print_exc()
+            from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "错误", f"无法打开日志窗口: {str(e)}")
     
     def disconnect_state_connections(self):
@@ -2260,7 +2379,20 @@ class SimpleMainWindow(QMainWindow):
             event.accept()  # 确保窗口能够关闭
 
     def _init_message_processor(self):
-        """初始化消息处理器"""
+        """初始化消息处理器（异步版本）"""
+        try:
+            print("开始异步初始化消息处理器...")
+            self.update_progress("初始化消息处理器...")
+
+            # 使用异步微信工作器初始化
+            self.async_wechat_manager.init_message_processor()
+
+        except Exception as e:
+            print(f"启动异步消息处理器初始化失败: {e}")
+            self.monitoring_failed(f"消息处理器初始化失败: {e}")
+
+    def _init_message_processor_sync(self):
+        """同步初始化消息处理器（备用方法）"""
         try:
             # 延迟导入，避免Flask依赖
             from app.services.accounting_service import AccountingService
@@ -2274,7 +2406,7 @@ class SimpleMainWindow(QMainWindow):
             self.message_monitor = MessageMonitor(self.accounting_service)
 
             print("消息监控器初始化成功")
-            
+
             # 连接信号
             self.message_monitor.message_received.connect(self._on_message_received)
             self.message_monitor.accounting_result.connect(self._on_accounting_result)
@@ -2282,7 +2414,7 @@ class SimpleMainWindow(QMainWindow):
             self.message_monitor.error_occurred.connect(self._on_monitor_error)
             self.message_monitor.chat_status_changed.connect(self._on_chat_status_changed)
             self.message_monitor.statistics_updated.connect(self._on_statistics_updated)
-            
+
         except Exception as e:
             print(f"初始化消息处理器失败: {e}")
             self.message_monitor = None
@@ -2449,26 +2581,32 @@ class SimpleMainWindow(QMainWindow):
             self.monitoring_failed(f"启动监控失败: {str(e)}")
     
     def check_api_status_and_continue(self):
-        """检查API服务状态并继续"""
+        """检查API服务状态并继续（异步版本）"""
         try:
-            import requests
-            
-            # 检查API服务是否运行
-            try:
-                response = requests.get("http://localhost:5000/api/health", timeout=3)
-                if response.status_code == 200:
-                    print("✓ API服务已运行")
-                    # API服务正常，检查微信状态
-                    self.check_wechat_status_and_continue()
-                else:
-                    # API服务异常，需要启动
-                    self.update_progress("启动HTTP API中...")
-                    self.start_api_and_wait()
-            except requests.exceptions.RequestException:
+            print("开始异步检查API服务状态...")
+            self.update_progress("检查HTTP API状态...")
+
+            # 使用异步HTTP管理器检查API服务
+            from app.utils.async_http import async_http_manager
+
+            def on_api_check_success(data):
+                print("✓ API服务已运行")
+                # API服务正常，检查微信状态
+                self.check_wechat_status_and_continue()
+
+            def on_api_check_error(error_msg):
+                print(f"✗ API服务检查失败: {error_msg}")
                 # API服务未运行，需要启动
                 self.update_progress("启动HTTP API中...")
                 self.start_api_and_wait()
-                
+
+            async_http_manager.get(
+                "http://localhost:5000/api/health",
+                timeout=3,
+                success_callback=on_api_check_success,
+                error_callback=on_api_check_error
+            )
+
         except Exception as e:
             self.monitoring_failed(f"检查API服务失败: {str(e)}")
     
@@ -2485,116 +2623,33 @@ class SimpleMainWindow(QMainWindow):
             self.monitoring_failed(f"启动API服务失败: {str(e)}")
     
     def wait_for_api_ready(self):
-        """等待API服务就绪"""
+        """等待API服务就绪（异步版本）"""
         try:
-            import requests
-            response = requests.get("http://localhost:5000/api/health", timeout=5)
-            if response.status_code == 200:
+            print("开始异步等待API服务就绪...")
+            self.update_progress("等待API服务就绪...")
+
+            # 使用异步HTTP管理器检查API服务
+            from app.utils.async_http import async_http_manager
+
+            def on_api_ready_success(data):
                 print("✓ API服务启动成功")
                 self.check_wechat_status_and_continue()
-            else:
+
+            def on_api_ready_error(error_msg):
+                print(f"✗ API服务启动后状态异常: {error_msg}")
                 self.monitoring_failed("API服务启动后状态异常")
+
+            async_http_manager.get(
+                "http://localhost:5000/api/health",
+                timeout=5,
+                success_callback=on_api_ready_success,
+                error_callback=on_api_ready_error
+            )
+
         except Exception as e:
             self.monitoring_failed(f"等待API服务就绪失败: {str(e)}")
     
-    def check_wechat_status_and_continue(self):
-        """检查微信状态并继续"""
-        try:
-            import requests
-            
-            # 检查微信状态
-            try:
-                response = requests.get("http://localhost:5000/api/wechat/status", timeout=3)
-                if response.status_code == 200:
-                    result = response.json()
-                    if result.get('code') == 0 and result.get('data', {}).get('status') == 'connected':
-                        print("✓ 微信已连接")
-                        # 微信已连接，直接添加监听对象
-                        self.add_listeners_step()
-                    else:
-                        # 微信未连接，需要初始化
-                        self.update_progress("初始化微信中...")
-                        self.initialize_wechat_and_wait()
-                else:
-                    # 微信状态异常，需要初始化
-                    self.update_progress("初始化微信中...")
-                    self.initialize_wechat_and_wait()
-            except requests.exceptions.RequestException:
-                # 无法获取微信状态，需要初始化
-                self.update_progress("初始化微信中...")
-                self.initialize_wechat_and_wait()
-                
-        except Exception as e:
-            self.monitoring_failed(f"检查微信状态失败: {str(e)}")
-    
-    def initialize_wechat_and_wait(self):
-        """初始化微信并等待"""
-        try:
-            import requests
-            api_key = "test-key-2"
-            response = requests.post(
-                "http://localhost:5000/api/wechat/initialize",
-                headers={"X-API-Key": api_key},
-                timeout=30
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                if result.get('code') == 0:
-                    print("✓ 微信初始化成功")
-                    # 微信初始化成功，继续添加监听对象
-                    self.add_listeners_step()
-                else:
-                    self.monitoring_failed(f"微信初始化失败: {result.get('message')}")
-            else:
-                self.monitoring_failed(f"微信初始化失败: HTTP {response.status_code}")
-                
-        except Exception as e:
-            self.monitoring_failed(f"微信初始化异常: {str(e)}")
-    
-    def add_listeners_step(self):
-        """添加监听对象步骤"""
-        try:
-            self.update_progress("添加监听对象中...")
-            
-            # 检查消息监控器
-            if not self.message_monitor:
-                self.monitoring_failed("消息监控器未初始化")
-                return
-            
-            # 获取监控会话列表
-            monitoring_config = state_manager.get_monitoring_status()
-            monitored_chats = monitoring_config.get('monitored_chats', [])
-            
-            if not monitored_chats:
-                # 如果没有配置监控会话，使用默认会话
-                monitored_chats = ["张杰"]
-                print("没有配置监控会话，使用默认会话: 张杰")
-            
-            print(f"监控聊天列表: {monitored_chats}")
-            
-            # 添加聊天对象到消息监控器
-            success_count = 0
-            for chat_name in monitored_chats:
-                print(f"正在添加监控目标: {chat_name}")
-                try:
-                    # 使用MessageMonitor添加聊天对象
-                    if self.message_monitor.add_chat_target(chat_name):
-                        success_count += 1
-                        print(f"✓ 成功添加监控目标: {chat_name}")
-                    else:
-                        print(f"监控目标已存在: {chat_name}")
-                        success_count += 1  # 已存在也算成功
-                except Exception as e:
-                    print(f"添加监控目标失败 {chat_name}: {e}")
-                    # 继续处理其他目标
-            
-            # 等待一下让添加操作完成
-            QTimer.singleShot(1000, lambda: self.start_listening_step_delayed(success_count))
-                
-        except Exception as e:
-            self.monitoring_failed(f"添加监听对象失败: {str(e)}")
-    
+
     def start_listening_step_delayed(self, success_count):
         """延迟启动监听步骤"""
         if success_count > 0:
@@ -2603,24 +2658,70 @@ class SimpleMainWindow(QMainWindow):
             self.monitoring_failed("没有成功添加任何监控目标")
     
     def start_listening_step(self):
-        """开始监听步骤"""
+        """开始监听步骤（异步版本）"""
         try:
             self.update_progress("启动消息监听中...")
-            
+
             # 检查消息监控器
             if not self.message_monitor:
                 self.monitoring_failed("消息监控器未初始化")
                 return
-            
+
             # 获取监控会话列表
             monitoring_config = state_manager.get_monitoring_status()
             monitored_chats = monitoring_config.get('monitored_chats', ["张杰"])
-            
+
+            print(f"正在异步启动消息监控: {monitored_chats}")
+
+            # 使用异步微信工作器启动监控
+            self.async_wechat_manager.start_chat_monitoring(self.message_monitor, monitored_chats)
+
+        except Exception as e:
+            print(f"启动异步监听失败: {e}")
+            self.monitoring_failed(f"启动监听失败: {str(e)}")
+
+    def start_listening_step_async(self):
+        """异步启动监听步骤（从异步回调中调用）"""
+        try:
+            self.update_progress("启动消息监听中...")
+
+            # 检查消息监控器
+            if not self.message_monitor:
+                self.monitoring_failed("消息监控器未初始化")
+                return
+
+            # 获取监控会话列表
+            monitoring_config = state_manager.get_monitoring_status()
+            monitored_chats = monitoring_config.get('monitored_chats', ["张杰"])
+
+            print(f"正在异步启动消息监控: {monitored_chats}")
+
+            # 使用异步微信工作器启动监控
+            self.async_wechat_manager.start_chat_monitoring(self.message_monitor, monitored_chats)
+
+        except Exception as e:
+            print(f"启动异步监听失败: {e}")
+            self.monitoring_failed(f"启动监听失败: {str(e)}")
+
+    def start_listening_step_sync(self):
+        """开始监听步骤（同步版本，备用）"""
+        try:
+            self.update_progress("启动消息监听中...")
+
+            # 检查消息监控器
+            if not self.message_monitor:
+                self.monitoring_failed("消息监控器未初始化")
+                return
+
+            # 获取监控会话列表
+            monitoring_config = state_manager.get_monitoring_status()
+            monitored_chats = monitoring_config.get('monitored_chats', ["张杰"])
+
             # 使用MessageMonitor启动监控
             print("正在启动消息监控...")
             success_count = 0
             attempted_count = 0
-            
+
             for chat_name in monitored_chats:
                 attempted_count += 1
                 try:
@@ -2645,7 +2746,7 @@ class SimpleMainWindow(QMainWindow):
                             print(f"✓ 监控实际上已启动（异常后检查）: {chat_name}")
                     except:
                         pass
-            
+
             # 使用更宽松的成功标准：只要有尝试启动的目标就认为成功
             if attempted_count > 0:
                 print(f"✓ 尝试启动 {attempted_count} 个监控目标，实际成功 {success_count} 个")
@@ -2655,7 +2756,7 @@ class SimpleMainWindow(QMainWindow):
             else:
                 print("✗ 没有找到任何监控目标")
                 self.monitoring_failed("没有找到任何监控目标")
-                
+
         except Exception as e:
             print(f"启动监听异常: {e}")
             # 即使出现异常，也尝试标记为成功（因为可能实际上已经启动了）
@@ -3192,21 +3293,19 @@ class SimpleMainWindow(QMainWindow):
     def _check_first_run(self) -> bool:
         """检测是否为首次运行"""
         try:
-            # 检查配置文件是否存在
+            # 使用专门的首次运行标记文件
             if getattr(sys, 'frozen', False):
                 # 打包环境
                 app_dir = os.path.dirname(sys.executable)
-                config_file = os.path.join(app_dir, "data", "api", "config", "user_config.json")
-                db_file = os.path.join(app_dir, "data", "message_processor.db")
+                first_run_marker = os.path.join(app_dir, "data", ".first_run_completed")
             else:
                 # 开发环境
                 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-                config_file = os.path.join(project_root, "data", "api", "config", "user_config.json")
-                db_file = os.path.join(project_root, "data", "message_processor.db")
-            
-            # 如果配置文件和数据库都不存在，认为是首次运行
-            return not (os.path.exists(config_file) and os.path.exists(db_file))
-            
+                first_run_marker = os.path.join(project_root, "data", ".first_run_completed")
+
+            # 如果标记文件不存在，认为是首次运行
+            return not os.path.exists(first_run_marker)
+
         except Exception as e:
             print(f"检测首次运行状态失败: {e}")
             return False
@@ -3215,7 +3314,7 @@ class SimpleMainWindow(QMainWindow):
         """显示首次运行欢迎信息"""
         try:
             from PyQt6.QtWidgets import QMessageBox
-            
+
             msg = QMessageBox(self)
             msg.setWindowTitle("欢迎使用")
             msg.setIcon(QMessageBox.Icon.Information)
@@ -3230,9 +3329,38 @@ class SimpleMainWindow(QMainWindow):
             )
             msg.setStandardButtons(QMessageBox.StandardButton.Ok)
             msg.exec()
-            
+
+            # 创建首次运行完成标记文件
+            self._create_first_run_marker()
+
         except Exception as e:
             print(f"显示欢迎信息失败: {e}")
+
+    def _create_first_run_marker(self):
+        """创建首次运行完成标记文件"""
+        try:
+            # 获取标记文件路径
+            if getattr(sys, 'frozen', False):
+                # 打包环境
+                app_dir = os.path.dirname(sys.executable)
+                first_run_marker = os.path.join(app_dir, "data", ".first_run_completed")
+            else:
+                # 开发环境
+                project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                first_run_marker = os.path.join(project_root, "data", ".first_run_completed")
+
+            # 确保data目录存在
+            os.makedirs(os.path.dirname(first_run_marker), exist_ok=True)
+
+            # 创建标记文件
+            with open(first_run_marker, 'w', encoding='utf-8') as f:
+                f.write(f"首次运行完成时间: {datetime.now().isoformat()}\n")
+                f.write("此文件用于标记程序已完成首次运行，请勿删除。\n")
+
+            print(f"已创建首次运行标记文件: {first_run_marker}")
+
+        except Exception as e:
+            print(f"创建首次运行标记文件失败: {e}")
 
 def main():
     """主函数"""

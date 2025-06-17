@@ -8,7 +8,12 @@ import requests
 from typing import Dict, Optional, Tuple
 from app.utils.config_manager import ConfigManager
 
-logger = logging.getLogger(__name__)
+# 使用统一的日志系统
+try:
+    from app.logs import get_logger
+    logger = get_logger(__name__)
+except ImportError:
+    logger = logging.getLogger(__name__)
 
 class SimpleMessageProcessor:
     """简化版消息处理器"""
@@ -198,7 +203,7 @@ class SimpleMessageProcessor:
 
             # 检查是否与记账无关
             if smart_result.get('isRelevant') is False:
-                return "💬 聊天与记账无关"
+                return "信息与记账无关"
 
             # 检查是否有错误信息
             if 'error' in smart_result:
