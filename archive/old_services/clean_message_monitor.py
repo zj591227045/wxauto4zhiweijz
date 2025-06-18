@@ -35,9 +35,22 @@ class CleanMessageMonitor(QObject):
         # 消息去重：记录已处理的消息内容
         self.processed_messages = {}  # chat_name -> Set[message_content]
 
+        # 状态管理器
+        self.state_manager = None
+        self._init_state_manager()
+
         # 初始化微信
         self._init_wechat()
-    
+
+    def _init_state_manager(self):
+        """初始化状态管理器"""
+        try:
+            from app.utils.state_manager import state_manager
+            self.state_manager = state_manager
+            logger.info("状态管理器初始化成功")
+        except Exception as e:
+            logger.error(f"状态管理器初始化失败: {e}")
+
     def _init_wechat(self):
         """初始化微信实例"""
         try:
@@ -99,6 +112,15 @@ class CleanMessageMonitor(QObject):
             if success_count > 0:
                 self.is_running = True
                 self.status_changed.emit(True)
+
+                # 更新监控状态
+                if self.state_manager:
+                    self.state_manager.update_monitoring_status(
+                        is_active=True,
+                        monitored_chats=self.monitored_chats,
+                        check_interval=self.check_interval
+                    )
+
                 logger.info(f"消息监控已启动，成功启动 {success_count}/{len(self.monitored_chats)} 个聊天对象")
                 return True
             else:
@@ -178,6 +200,15 @@ class CleanMessageMonitor(QObject):
             
             self.is_running = False
             self.status_changed.emit(False)
+
+            # 更新监控状态
+            if self.state_manager:
+                self.state_manager.update_monitoring_status(
+                    is_active=False,
+                    monitored_chats=[],
+                    check_interval=self.check_interval
+                )
+
             logger.info("消息监控已停止")
         
         except Exception as e:
@@ -224,8 +255,10 @@ class CleanMessageMonitor(QObject):
         """监控循环 - 完全简化版本"""
         try:
             logger.info(f"开始简化监控循环: {chat_name}")
-            
+
             loop_count = 0
+            last_status_update = time.time()
+
             while not stop_event.is_set():
                 try:
                     loop_count += 1
@@ -295,6 +328,24 @@ class CleanMessageMonitor(QObject):
                                 message_type = getattr(message, 'type', 'unknown')
                                 logger.debug(f"[{chat_name}] 跳过非朋友消息，类型: {message_type}")
                     
+                    # 定期更新监控状态和微信状态（每次循环都更新）
+                    current_time = time.time()
+                    if self.state_manager and (current_time - last_status_update) >= 2:  # 每2秒更新一次状态
+                        try:
+                            # 检查微信在线状态
+                            wechat_online = self.check_wechat_status()
+
+                            # 更新监控状态
+                            self.state_manager.update_monitoring_status(
+                                is_active=True,
+                                monitored_chats=self.monitored_chats,
+                                check_interval=self.check_interval
+                            )
+                            last_status_update = current_time
+                            logger.debug(f"[{chat_name}] 更新监控状态，微信在线: {wechat_online}")
+                        except Exception as e:
+                            logger.warning(f"[{chat_name}] 更新监控状态失败: {e}")
+
                     # 等待下次检查
                     stop_event.wait(self.check_interval)
                 
@@ -313,11 +364,39 @@ class CleanMessageMonitor(QObject):
         """检查微信状态"""
         try:
             if not self.wx_instance:
+                logger.debug("微信实例不存在")
                 return False
-            # 简化版本：只检查实例是否存在
-            return True
+
+            # 使用 wx.IsOnline() 检查微信在线状态
+            is_online = self.wx_instance.IsOnline()
+            logger.debug(f"微信在线状态: {is_online}")
+
+            # 更新微信状态到状态管理器
+            if self.state_manager:
+                try:
+                    status = 'online' if is_online else 'offline'
+                    self.state_manager.update_wechat_status(
+                        status=status,
+                        library_type='wxauto'
+                    )
+                except Exception as e:
+                    logger.warning(f"更新微信状态失败: {e}")
+
+            return is_online
         except Exception as e:
             logger.error(f"检查微信状态失败: {e}")
+
+            # 更新错误状态
+            if self.state_manager:
+                try:
+                    self.state_manager.update_wechat_status(
+                        status='error',
+                        error_message=str(e),
+                        library_type='wxauto'
+                    )
+                except Exception:
+                    pass
+
             return False
 
     def _is_system_reply_message(self, content: str) -> bool:

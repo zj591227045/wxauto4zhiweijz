@@ -325,4 +325,30 @@ class ConfigManager:
     
     def get_config(self) -> UserConfig:
         """获取当前配置"""
-        return self.config 
+        return self.config
+
+    def get_accounting_config(self) -> Dict[str, Any]:
+        """获取记账配置（兼容性方法）"""
+        try:
+            # 从状态管理器获取最新的记账配置
+            from app.utils.state_manager import state_manager
+            accounting_status = state_manager.get_accounting_service_status()
+
+            return {
+                'server_url': accounting_status.get('server_url', ''),
+                'username': accounting_status.get('username', ''),
+                'password': accounting_status.get('password', ''),
+                'token': accounting_status.get('token', ''),
+                'account_book_id': accounting_status.get('selected_account_book', ''),
+                'account_book_name': accounting_status.get('selected_account_book_name', '')
+            }
+        except Exception as e:
+            logger.error(f"获取记账配置失败: {e}")
+            return {
+                'server_url': self.config.accounting.server_url,
+                'username': self.config.accounting.username,
+                'password': self.config.accounting.password,
+                'token': self.config.accounting.token,
+                'account_book_id': self.config.accounting.account_book_id,
+                'account_book_name': self.config.accounting.account_book_name
+            }

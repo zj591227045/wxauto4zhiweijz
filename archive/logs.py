@@ -85,17 +85,21 @@ class EnhancedMemoryLogHandler(logging.Handler):
             if len(self.error_logs) > self.capacity // 2:
                 self.error_logs.pop(0)
 
-            # 发射新日志信号（在主线程中）
+            # 发射新日志信号（线程安全）
             try:
                 if hasattr(log_signal_emitter, 'new_log') and log_signal_emitter.new_log:
-                    # 使用QThread检查是否在主线程中
-                    if hasattr(QThread, 'currentThread'):
-                        log_signal_emitter.new_log.emit(msg, record.levelname)
-                    else:
-                        # 如果不在主线程，直接发射信号
-                        log_signal_emitter.new_log.emit(msg, record.levelname)
-            except (RuntimeError, AttributeError) as e:
-                # 忽略信号发射错误（通常发生在窗口关闭后）
+                    # 使用Qt的线程安全信号发射
+                    try:
+                        # 创建时间戳
+                        timestamp = datetime.fromtimestamp(record.created).strftime('%H:%M:%S.%f')[:-3]
+
+                        # 发射信号，包含时间戳
+                        log_signal_emitter.new_log.emit(f"[{timestamp}] {msg}", record.levelname)
+                    except RuntimeError:
+                        # 如果信号发射失败（通常是因为接收者已被销毁），忽略错误
+                        pass
+            except (RuntimeError, AttributeError):
+                # 忽略信号发射错误
                 pass
 
         except Exception as e:
@@ -310,101 +314,156 @@ class SpecificLogFilter(logging.Filter):
 
 def setup_enhanced_logger():
     """设置增强的日志系统"""
-    # 创建日志目录
-    project_root = Path(__file__).parent.parent
-    logs_dir = project_root / "data" / "Logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        # 创建日志目录
+        project_root = Path(__file__).parent.parent
+        logs_dir = project_root / "data" / "Logs"
 
-    # 设置第三方库的日志级别
-    logging.getLogger('werkzeug').setLevel(logging.WARNING)
-    logging.getLogger('http.server').setLevel(logging.WARNING)
-    logging.getLogger('urllib3').setLevel(logging.WARNING)
-    logging.getLogger('comtypes').setLevel(logging.WARNING)
+        # 确保目录存在并可写
+        try:
+            logs_dir.mkdir(parents=True, exist_ok=True)
 
-    # 创建主logger实例
-    logger = logging.getLogger('wxauto-assistant')
-    logger.setLevel(logging.DEBUG)
+            # 测试目录是否可写
+            test_file = logs_dir / "test_write.tmp"
+            test_file.write_text("test", encoding='utf-8')
+            test_file.unlink()
 
-    # 如果logger已经有处理器，先清除
-    if logger.handlers:
-        logger.handlers.clear()
+            print(f"✓ 日志目录创建成功: {logs_dir}")
+        except Exception as e:
+            print(f"✗ 创建日志目录失败: {e}")
+            # 使用临时目录作为备选
+            import tempfile
+            logs_dir = Path(tempfile.gettempdir()) / "wxauto_assistant_logs"
+            logs_dir.mkdir(exist_ok=True)
+            print(f"使用临时日志目录: {logs_dir}")
 
-    # 设置根日志记录器，捕获所有日志
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.DEBUG)
+        # 设置第三方库的日志级别
+        logging.getLogger('werkzeug').setLevel(logging.WARNING)
+        logging.getLogger('http.server').setLevel(logging.WARNING)
+        logging.getLogger('urllib3').setLevel(logging.WARNING)
+        logging.getLogger('comtypes').setLevel(logging.WARNING)
 
-    # 清除根日志记录器的现有处理器
-    for handler in root_logger.handlers[:]:
-        root_logger.removeHandler(handler)
+        # 创建主logger实例
+        logger = logging.getLogger('wxauto-assistant')
+        logger.setLevel(logging.DEBUG)
 
-    # 创建格式化器
-    detailed_formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(module)s:%(funcName)s:%(lineno)d - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
+        # 如果logger已经有处理器，先清除
+        if logger.handlers:
+            for handler in logger.handlers[:]:
+                try:
+                    handler.close()
+                except:
+                    pass
+            logger.handlers.clear()
 
-    simple_formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
+        # 设置根日志记录器，捕获所有日志
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.DEBUG)
 
-    # 创建自定义日志过滤器
-    specific_filter = SpecificLogFilter()
+        # 清除根日志记录器的现有处理器
+        for handler in root_logger.handlers[:]:
+            try:
+                handler.close()
+            except:
+                pass
+            root_logger.removeHandler(handler)
 
-    # 1. 添加增强的内存日志处理器到主logger和根logger
-    memory_handler = EnhancedMemoryLogHandler(capacity=1000)
-    memory_handler.setFormatter(detailed_formatter)
-    memory_handler.setLevel(logging.DEBUG)
-    logger.addHandler(memory_handler)
-    root_logger.addHandler(memory_handler)  # 也添加到根logger以捕获所有日志
+        # 创建格式化器
+        detailed_formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(module)s:%(funcName)s:%(lineno)d - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
 
-    # 2. 添加按天切割的文件处理器（不包含DEBUG日志）
-    log_file = logs_dir / f"wxauto_assistant_{datetime.now().strftime('%Y%m%d')}.log"
-    file_handler = TimedRotatingFileHandler(
-        str(log_file),
-        when='midnight',
-        interval=1,
-        backupCount=30,  # 保留30天的日志
-        encoding='utf-8'
-    )
-    file_handler.setFormatter(detailed_formatter)
-    file_handler.addFilter(specific_filter)
-    file_handler.setLevel(logging.INFO)  # 文件只记录INFO及以上级别
-    logger.addHandler(file_handler)
-    root_logger.addHandler(file_handler)  # 也添加到根logger
+        simple_formatter = logging.Formatter(
+            '%(asctime)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
 
-    # 3. 添加控制台处理器
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(simple_formatter)
-    console_handler.addFilter(specific_filter)
-    console_handler.setLevel(logging.INFO)  # 控制台显示INFO及以上级别
-    logger.addHandler(console_handler)
-    root_logger.addHandler(console_handler)  # 也添加到根logger
+        # 创建自定义日志过滤器
+        specific_filter = SpecificLogFilter()
 
-    # 4. 添加错误日志文件处理器
-    error_log_file = logs_dir / f"error_{datetime.now().strftime('%Y%m%d')}.log"
-    error_handler = TimedRotatingFileHandler(
-        str(error_log_file),
-        when='midnight',
-        interval=1,
-        backupCount=90,  # 错误日志保留90天
-        encoding='utf-8'
-    )
-    error_handler.setFormatter(detailed_formatter)
-    error_handler.setLevel(logging.ERROR)  # 只记录错误日志
-    logger.addHandler(error_handler)
-    root_logger.addHandler(error_handler)  # 也添加到根logger
+        # 1. 添加增强的内存日志处理器
+        memory_handler = EnhancedMemoryLogHandler(capacity=1000)
+        memory_handler.setFormatter(detailed_formatter)
+        memory_handler.setLevel(logging.DEBUG)
+        logger.addHandler(memory_handler)
+        root_logger.addHandler(memory_handler)
 
-    # 设置传播标志
-    logger.propagate = False
+        # 2. 添加按天切割的文件处理器（带错误处理）
+        try:
+            log_file = logs_dir / f"wxauto_assistant_{datetime.now().strftime('%Y%m%d')}.log"
+            file_handler = TimedRotatingFileHandler(
+                str(log_file),
+                when='midnight',
+                interval=1,
+                backupCount=30,
+                encoding='utf-8'
+            )
+            file_handler.setFormatter(detailed_formatter)
+            file_handler.addFilter(specific_filter)
+            file_handler.setLevel(logging.INFO)
+            logger.addHandler(file_handler)
+            root_logger.addHandler(file_handler)
+            print(f"✓ 文件日志处理器创建成功: {log_file}")
+        except Exception as e:
+            print(f"✗ 创建文件日志处理器失败: {e}")
 
-    # 配置其他常用的logger，让它们使用我们的处理器
-    for logger_name in ['app.services', 'app.utils', 'app.qt_ui', 'comtypes.client._code_cache']:
-        sub_logger = logging.getLogger(logger_name)
-        sub_logger.setLevel(logging.DEBUG)
-        sub_logger.propagate = True  # 让它们传播到根logger
+        # 3. 添加控制台处理器（带错误处理）
+        try:
+            console_handler = logging.StreamHandler(sys.stdout)
+            console_handler.setFormatter(simple_formatter)
+            console_handler.addFilter(specific_filter)
+            console_handler.setLevel(logging.INFO)
+            logger.addHandler(console_handler)
+            root_logger.addHandler(console_handler)
+            print("✓ 控制台日志处理器创建成功")
+        except Exception as e:
+            print(f"✗ 创建控制台日志处理器失败: {e}")
 
-    return logger, memory_handler
+        # 4. 添加错误日志文件处理器（带错误处理）
+        try:
+            error_log_file = logs_dir / f"error_{datetime.now().strftime('%Y%m%d')}.log"
+            error_handler = TimedRotatingFileHandler(
+                str(error_log_file),
+                when='midnight',
+                interval=1,
+                backupCount=90,
+                encoding='utf-8'
+            )
+            error_handler.setFormatter(detailed_formatter)
+            error_handler.setLevel(logging.ERROR)
+            logger.addHandler(error_handler)
+            root_logger.addHandler(error_handler)
+            print(f"✓ 错误日志处理器创建成功: {error_log_file}")
+        except Exception as e:
+            print(f"✗ 创建错误日志处理器失败: {e}")
+
+        # 设置传播标志
+        logger.propagate = False
+
+        # 配置其他常用的logger
+        for logger_name in ['app.services', 'app.utils', 'app.qt_ui', 'comtypes.client._code_cache']:
+            try:
+                sub_logger = logging.getLogger(logger_name)
+                sub_logger.setLevel(logging.DEBUG)
+                sub_logger.propagate = True
+            except Exception as e:
+                print(f"配置子logger失败 {logger_name}: {e}")
+
+        print("✓ 增强日志系统初始化完成")
+        return logger, memory_handler
+
+    except Exception as e:
+        print(f"✗ 设置增强日志系统失败: {e}")
+        # 返回基本的logger
+        basic_logger = logging.getLogger('wxauto-assistant')
+        basic_logger.setLevel(logging.DEBUG)
+
+        # 创建基本的内存处理器
+        basic_memory_handler = EnhancedMemoryLogHandler(capacity=1000)
+        basic_logger.addHandler(basic_memory_handler)
+
+        return basic_logger, basic_memory_handler
 
 # 创建增强的logger实例和内存日志处理器
 base_logger, memory_handler = setup_enhanced_logger()
@@ -452,10 +511,8 @@ def setup_print_redirect():
 # 初始化print重定向器（但不激活）
 setup_print_redirect()
 
-# 添加一些测试日志来验证系统工作
+# 日志系统初始化完成
 logger.info("增强日志系统初始化完成")
-logger.debug("这是一条DEBUG日志，只在内存中显示")
-logger.info("这是一条INFO日志，会保存到文件")
 
 # 创建一个便捷函数来获取其他模块的logger
 def get_logger(name):

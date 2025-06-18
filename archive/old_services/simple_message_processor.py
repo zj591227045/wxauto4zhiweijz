@@ -15,12 +15,30 @@ try:
 except ImportError:
     logger = logging.getLogger(__name__)
 
+# 导入token管理器
+try:
+    from app.utils.token_manager import get_token_manager
+except ImportError:
+    logger.warning("无法导入token管理器")
+    get_token_manager = None
+
 class SimpleMessageProcessor:
     """简化版消息处理器"""
     
     def __init__(self):
         self.config_manager = ConfigManager()
-        
+        self.token_manager = None
+        self._init_token_manager()
+
+    def _init_token_manager(self):
+        """初始化token管理器"""
+        try:
+            if get_token_manager:
+                from app.utils.state_manager import state_manager
+                self.token_manager = get_token_manager(state_manager)
+        except Exception as e:
+            logger.warning(f"初始化token管理器失败: {e}")
+
     def process_message(self, message_content: str, sender_name: str = None) -> Tuple[bool, str]:
         """
         处理消息并调用记账服务
@@ -39,8 +57,16 @@ class SimpleMessageProcessor:
 
             # 检查配置是否完整
             server_url = accounting_status.get('server_url')
-            token = accounting_status.get('token')
             account_book_id = accounting_status.get('selected_account_book')
+
+            # 使用token管理器获取有效token
+            token = None
+            if self.token_manager:
+                token = self.token_manager.get_valid_token()
+
+            # 如果token管理器没有获取到token，使用状态管理器中的token
+            if not token:
+                token = accounting_status.get('token')
 
             logger.info(f"记账配置检查 - server_url: {server_url}, token: {'***' if token else 'None'}, account_book_id: {account_book_id}")
 
@@ -54,22 +80,63 @@ class SimpleMessageProcessor:
                 logger.error(error_msg)
                 return False, error_msg
 
-            # 调用智能记账API
-            success, result_msg = self._call_smart_accounting_api(
+            # 调用智能记账API（带重试机制）
+            success, result_msg = self._call_smart_accounting_api_with_retry(
                 message_content,
                 server_url,
                 token,
                 account_book_id,
                 sender_name
             )
-            
+
             return success, result_msg
             
         except Exception as e:
             error_msg = f"处理消息失败: {e}"
             logger.error(error_msg)
             return False, error_msg
-    
+
+    def _call_smart_accounting_api_with_retry(self, message_content: str, server_url: str,
+                                            token: str, account_book_id: str, sender_name: str = None) -> Tuple[bool, str]:
+        """
+        带重试机制的智能记账API调用
+
+        Args:
+            message_content: 消息内容
+            server_url: 服务器地址
+            token: 认证令牌
+            account_book_id: 账本ID
+            sender_name: 发送者名称
+
+        Returns:
+            (成功状态, 结果消息)
+        """
+        # 第一次尝试
+        success, result_msg = self._call_smart_accounting_api(
+            message_content, server_url, token, account_book_id, sender_name
+        )
+
+        # 如果认证失败且有token管理器，尝试刷新token后重试
+        if not success and "认证失败" in result_msg and self.token_manager:
+            logger.info("检测到认证失败，尝试刷新token后重试")
+
+            # 强制刷新token
+            if self.token_manager.force_refresh():
+                # 获取新token
+                new_token = self.token_manager.get_valid_token()
+                if new_token and new_token != token:
+                    logger.info("Token刷新成功，使用新token重试")
+                    # 使用新token重试
+                    success, result_msg = self._call_smart_accounting_api(
+                        message_content, server_url, new_token, account_book_id, sender_name
+                    )
+                else:
+                    logger.error("Token刷新失败或获取到相同token")
+            else:
+                logger.error("Token刷新失败")
+
+        return success, result_msg
+
     def _call_smart_accounting_api(self, message_content: str, server_url: str,
                                  token: str, account_book_id: str, sender_name: str = None) -> Tuple[bool, str]:
         """

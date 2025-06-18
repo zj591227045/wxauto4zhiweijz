@@ -21,6 +21,13 @@ try:
 except ImportError:
     logger = logging.getLogger(__name__)
 
+# 导入token管理器
+try:
+    from app.utils.token_manager import get_token_manager
+except ImportError:
+    logger.warning("无法导入token管理器")
+    get_token_manager = None
+
 class MessageDeliveryService(QObject):
     """消息投递服务"""
     
@@ -31,6 +38,17 @@ class MessageDeliveryService(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.config_manager = ConfigManager()
+        self.token_manager = None
+        self._init_token_manager()
+
+    def _init_token_manager(self):
+        """初始化token管理器"""
+        try:
+            if get_token_manager:
+                from app.utils.state_manager import state_manager
+                self.token_manager = get_token_manager(state_manager)
+        except Exception as e:
+            logger.warning(f"初始化token管理器失败: {e}")
         
     def process_and_deliver_message(self, chat_name: str, message_content: str, sender_name: str = None) -> Tuple[bool, str]:
         """
@@ -45,8 +63,8 @@ class MessageDeliveryService(QObject):
             (处理成功状态, 结果消息)
         """
         try:
-            # 1. 发送到智能记账API
-            accounting_success, accounting_result = self._send_to_accounting_api(message_content, sender_name)
+            # 1. 发送到智能记账API（带重试机制）
+            accounting_success, accounting_result = self._send_to_accounting_api_with_retry(message_content, sender_name)
             
             # 发出记账完成信号
             self.accounting_completed.emit(chat_name, accounting_success, accounting_result)
@@ -72,7 +90,35 @@ class MessageDeliveryService(QObject):
             logger.error(error_msg)
             self.accounting_completed.emit(chat_name, False, error_msg)
             return False, error_msg
-    
+
+    def _send_to_accounting_api_with_retry(self, message_content: str, sender_name: str = None) -> Tuple[bool, str]:
+        """
+        带重试机制的智能记账API调用
+
+        Args:
+            message_content: 消息内容
+            sender_name: 发送者名称
+
+        Returns:
+            (成功状态, 结果消息)
+        """
+        # 第一次尝试
+        success, result_msg = self._send_to_accounting_api(message_content, sender_name)
+
+        # 如果认证失败且有token管理器，尝试刷新token后重试
+        if not success and "认证失败" in result_msg and self.token_manager:
+            logger.info("检测到认证失败，尝试刷新token后重试")
+
+            # 强制刷新token
+            if self.token_manager.force_refresh():
+                logger.info("Token刷新成功，使用新token重试")
+                # 使用新token重试
+                success, result_msg = self._send_to_accounting_api(message_content, sender_name)
+            else:
+                logger.error("Token刷新失败")
+
+        return success, result_msg
+
     def _send_to_accounting_api(self, message_content: str, sender_name: str = None) -> Tuple[bool, str]:
         """
         发送消息到智能记账API
@@ -88,8 +134,16 @@ class MessageDeliveryService(QObject):
             # 获取配置
             config = self.config_manager.get_accounting_config()
             server_url = config.get('server_url', '').strip()
-            token = config.get('token', '').strip()
             account_book_id = config.get('account_book_id', '').strip()
+
+            # 使用token管理器获取有效token
+            token = None
+            if self.token_manager:
+                token = self.token_manager.get_valid_token()
+
+            # 如果token管理器没有获取到token，使用配置中的token
+            if not token:
+                token = config.get('token', '').strip()
 
             if not all([server_url, token, account_book_id]):
                 missing_configs = []
