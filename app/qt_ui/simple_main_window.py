@@ -134,26 +134,26 @@ class CircularButton(QPushButton):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
+
         # 计算圆形区域
         rect = self.rect()
         center_x = rect.width() // 2
         center_y = rect.height() // 2
         radius = min(center_x, center_y) - 5
-        
+
         # 绘制外圈渐变
         gradient = QLinearGradient(0, 0, 0, rect.height())
         if self.is_listening:
             gradient.setColorAt(0, QColor(255, 107, 107))  # 红色渐变
             gradient.setColorAt(1, QColor(255, 77, 77))
         else:
-            gradient.setColorAt(0, QColor(34, 197, 94))   # 绿色渐变 - 修改为绿色
-            gradient.setColorAt(1, QColor(22, 163, 74))
-        
+            gradient.setColorAt(0, QColor(59, 130, 246))   # 蓝色渐变 - 修改为蓝色
+            gradient.setColorAt(1, QColor(37, 99, 235))
+
         painter.setBrush(QBrush(gradient))
         painter.setPen(QPen(QColor(255, 255, 255, 50), 2))
         painter.drawEllipse(center_x - radius, center_y - radius, radius * 2, radius * 2)
-        
+
         # 绘制内圈
         inner_radius = radius - 8
         inner_gradient = QLinearGradient(0, 0, 0, rect.height())
@@ -161,14 +161,14 @@ class CircularButton(QPushButton):
             inner_gradient.setColorAt(0, QColor(255, 87, 87))
             inner_gradient.setColorAt(1, QColor(255, 57, 57))
         else:
-            inner_gradient.setColorAt(0, QColor(54, 217, 114))  # 绿色渐变 - 修改为绿色
-            inner_gradient.setColorAt(1, QColor(42, 183, 94))
-        
+            inner_gradient.setColorAt(0, QColor(79, 150, 255))  # 蓝色渐变 - 修改为蓝色
+            inner_gradient.setColorAt(1, QColor(57, 119, 245))
+
         painter.setBrush(QBrush(inner_gradient))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(center_x - inner_radius, center_y - inner_radius, 
+        painter.drawEllipse(center_x - inner_radius, center_y - inner_radius,
                           inner_radius * 2, inner_radius * 2)
-        
+
         # 绘制文字
         painter.setPen(QColor(255, 255, 255))
         painter.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
@@ -294,24 +294,24 @@ class StatCard(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
+
         rect = self.rect()
-        
-        # 绘制背景
+
+        # 绘制背景 - 使用更深的背景色以匹配参考图片
         painter.setBrush(QBrush(QColor(30, 41, 59)))
         painter.setPen(QPen(QColor(51, 65, 85), 1))
         painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 6, 6)
-        
-        # 绘制数值
+
+        # 绘制数值 - 使用蓝色
         painter.setPen(QColor(59, 130, 246))
-        painter.setFont(QFont("Microsoft YaHei", 16, QFont.Weight.Bold))
-        value_rect = QRect(0, 8, rect.width(), 25)
+        painter.setFont(QFont("Microsoft YaHei", 18, QFont.Weight.Bold))  # 增大字体
+        value_rect = QRect(0, 5, rect.width(), 30)  # 调整位置
         painter.drawText(value_rect, Qt.AlignmentFlag.AlignCenter, str(self.value))
-        
-        # 绘制标题
+
+        # 绘制标题 - 使用灰色
         painter.setPen(QColor(156, 163, 175))
-        painter.setFont(QFont("Microsoft YaHei", 8))
-        title_rect = QRect(0, 35, rect.width(), 20)
+        painter.setFont(QFont("Microsoft YaHei", 9))  # 稍微增大字体
+        title_rect = QRect(0, 38, rect.width(), 20)  # 调整位置
         painter.drawText(title_rect, Qt.AlignmentFlag.AlignCenter, self.title)
 
 class ConfigDialog(QDialog):
@@ -1151,16 +1151,16 @@ class SimpleMainWindow(QMainWindow):
         
         # 只为记账服务状态
         self.accounting_indicator = StatusIndicator(
-            "只为记账服务", 
-            "zhangqie@qq.com\n联系: 我们的客服更贴心"
+            "只为记账服务",
+            "账号: zhangjie@jacksonz.cn\n联系: 我们的家庭账本"
         )
         self.accounting_indicator.clicked.connect(lambda: self.open_config('只为记账服务'))
         status_layout.addWidget(self.accounting_indicator)
-        
+
         # 微信状态
         self.wechat_indicator = StatusIndicator(
-            "微信监控服务", 
-            "wxauto, 已启动\n微信: 助手"
+            "微信监控服务",
+            "wxauto: 已加载\n微信: 助手"
         )
         self.wechat_indicator.clicked.connect(lambda: self.open_config('微信监控服务'))
         status_layout.addWidget(self.wechat_indicator)
@@ -1205,9 +1205,9 @@ class SimpleMainWindow(QMainWindow):
         stats_layout = QHBoxLayout()
         stats_layout.setSpacing(15)
         
-        self.processed_card = StatCard("处理消息数", 0)
-        self.success_card = StatCard("成功记录数", 0)
-        self.failed_card = StatCard("失败记录数", 0)
+        self.processed_card = StatCard("处理消息数", 10)
+        self.success_card = StatCard("成功记账数", 6)
+        self.failed_card = StatCard("失败记账数", 4)
         
         stats_layout.addWidget(self.processed_card)
         stats_layout.addWidget(self.success_card)
@@ -1215,33 +1215,15 @@ class SimpleMainWindow(QMainWindow):
         
         main_layout.addLayout(stats_layout)
         
-        # 底部按钮
+        # 底部按钮 - 右下角的高级模式按钮
         bottom_layout = QHBoxLayout()
         bottom_layout.addStretch()
 
-        # 服务状态检查按钮
-        status_btn = QPushButton("服务状态检查")
-        status_btn.setStyleSheet("""
+        # 高级模式按钮
+        advanced_btn = QPushButton("高级模式")
+        advanced_btn.setStyleSheet("""
             QPushButton {
-                background: #8b5cf6;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 10px 20px;
-                font-size: 14px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background: #7c3aed;
-            }
-        """)
-        status_btn.clicked.connect(self.open_enhanced_monitor_window)
-        bottom_layout.addWidget(status_btn)
-
-        log_btn = QPushButton("日志窗口")
-        log_btn.setStyleSheet("""
-            QPushButton {
-                background: #374151;
+                background: #6b7280;
                 color: white;
                 border: none;
                 border-radius: 8px;
@@ -1253,8 +1235,8 @@ class SimpleMainWindow(QMainWindow):
                 background: #4b5563;
             }
         """)
-        log_btn.clicked.connect(self.open_log_window)
-        bottom_layout.addWidget(log_btn)
+        advanced_btn.clicked.connect(self.show_advanced_menu)
+        bottom_layout.addWidget(advanced_btn)
 
         main_layout.addLayout(bottom_layout)
     
@@ -2422,7 +2404,41 @@ class SimpleMainWindow(QMainWindow):
             traceback.print_exc()
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "错误", f"无法打开日志窗口: {str(e)}")
-    
+
+    def show_advanced_menu(self):
+        """显示高级模式菜单"""
+        from PyQt6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #374151;
+                color: white;
+                border: 1px solid #4b5563;
+                border-radius: 4px;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 8px 16px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: #4b5563;
+            }
+        """)
+
+        # 添加菜单项
+        monitor_action = menu.addAction("服务状态监控")
+        monitor_action.triggered.connect(self.open_enhanced_monitor_window)
+
+        log_action = menu.addAction("日志窗口")
+        log_action.triggered.connect(self.open_log_window)
+
+        # 在按钮位置显示菜单
+        button = self.sender()
+        if button:
+            menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
+
     def disconnect_state_connections(self):
         """断开状态连接"""
         try:

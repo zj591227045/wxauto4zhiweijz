@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-旧版UI启动脚本
-使用旧版UI界面和操作逻辑，集成最新的模块化架构
+新UI启动脚本
+使用新的UI样式（参考图片风格），集成最新的模块化架构
+包含蓝色圆形按钮、优化的统计卡片和查看日志功能
 """
 
 import sys
@@ -50,7 +51,7 @@ def setup_environment():
 def main():
     """主函数"""
     try:
-        logger.info("启动旧版UI（集成新模块化架构）...")
+        logger.info("启动新UI（集成新模块化架构）...")
         
         # 设置环境
         if not setup_environment():
@@ -60,7 +61,7 @@ def main():
         # 导入并启动旧版UI主窗口
         from app.qt_ui.legacy_ui_with_modules import main as run_legacy_window
         
-        logger.info("启动旧版UI主窗口...")
+        logger.info("启动新UI主窗口...")
         return run_legacy_window()
         
     except Exception as e:

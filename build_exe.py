@@ -35,7 +35,7 @@ def create_spec_file():
 block_cipher = None
 
 a = Analysis(
-    ['start_simple_ui.py'],
+    ['start_legacy_ui.py'],
     pathex=[],
     binaries=[],
     datas=[
@@ -43,13 +43,15 @@ a = Analysis(
         ('config', 'config'),
         ('icons', 'icons'),
         ('README.md', '.'),
-        ('README_SIMPLE.md', '.'),
         ('requirements.txt', '.'),
     ],
     hiddenimports=[
+        # PyQt6 核心模块
         'PyQt6.QtCore',
         'PyQt6.QtGui',
         'PyQt6.QtWidgets',
+        'PyQt6.QtNetwork',
+        # 第三方库
         'requests',
         'flask',
         'cryptography',
@@ -63,40 +65,27 @@ a = Analysis(
         'win32process',
         'wxauto',
         'wxautox',
-        # 核心服务模块
-        'app.services.zero_history_monitor',
-        'app.services.simple_message_processor',
-        'app.services.accounting_service',
-        'app.services.clean_message_monitor',
-        'app.services.integrated_message_service',
-        'app.services.message_delivery_service',
-        'app.services.platform_manager',
-        'app.services.platform_adapters',
-        'app.services.message_monitor',
-        # 工具模块
-        'app.utils.config_manager',
-        'app.utils.state_manager',
-        'app.utils.async_http',
-        'app.utils.async_message_recorder',
-        'app.utils.async_wechat_api',
-        'app.utils.async_wechat_worker',
-        'app.utils.message_processor',
-        # 核心模块
-        'app.wechat',
-        'app.wechat_adapter',
-        'app.wechat_init',
-        'app.api_service',
-        'app.config',
-        'app.config_manager',
-        'app.logs',
+        # 新模块化架构 - 核心模块
+        'app.modules.config_manager',
+        'app.modules.accounting_manager',
+        'app.modules.wechat_service_manager',
+        'app.modules.wxauto_manager',
+        'app.modules.message_listener',
+        'app.modules.message_delivery',
+        'app.modules.log_manager',
+        'app.modules.service_monitor',
         # UI模块
-        'app.qt_ui.simple_main_window',
+        'app.qt_ui.legacy_ui_with_modules',
+        'app.qt_ui.enhanced_log_window',
+        'app.qt_ui.enhanced_ui_components',
         'app.qt_ui.log_window',
-        # API模块
-        'app.api.routes',
-        'app.api.routes_minimal',
-        'app.api.message_api',
-        'app.api.chat_window',
+        'app.qt_ui.ui_components',
+        'app.qt_ui.simple_main_window',
+        'app.qt_ui.modular_main_window',
+        # 服务模块（仅包含存在的模块）
+        'app.services.accounting_service',
+        # 工具模块（仅包含存在的模块）
+        'app.utils.state_manager',
         # 标准库模块
         'threading',
         'queue',
@@ -116,8 +105,9 @@ a = Analysis(
         'http.client',
         'socket',
         'ssl',
+        'subprocess',
+        'dataclasses',
         # 第三方库
-        'python-dotenv',
         'typing_extensions',
     ],
     hookspath=[],
@@ -152,7 +142,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='icons/app_icon.ico',
+    icon='icons/app_icon.ico' if os.path.exists('icons/app_icon.ico') else None,
 )
 '''
     
@@ -193,7 +183,6 @@ def copy_additional_files():
     files_to_copy = [
         'README.md',
         'requirements.txt',
-        '.env.example',
     ]
 
     for file_name in files_to_copy:

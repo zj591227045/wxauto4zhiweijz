@@ -7,8 +7,7 @@
 import sys
 import os
 import logging
-import time
-import threading
+import subprocess
 from datetime import datetime
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QGridLayout, QLabel, QPushButton,
@@ -29,8 +28,9 @@ from app.modules import (
     LogManager, ServiceMonitor
 )
 
-# 导入旧版UI组件（保持外观一致）
-from app.qt_ui.ui_components import CircularButton, StatusIndicator, StatCard
+# 导入增强版UI组件（美化版本）
+from app.qt_ui.enhanced_ui_components import (EnhancedCircularButton, EnhancedStatusIndicator,
+                                              EnhancedStatCard, EnhancedButton, TexturedBackground)
 
 # 导入日志窗口
 from app.qt_ui.enhanced_log_window import EnhancedLogWindow
@@ -88,7 +88,7 @@ class ConfigDialog(QDialog):
         
         self.setWindowTitle(f"{config_type}配置")
         self.setMinimumSize(450, 400)
-        self.resize(450, 600)
+        # 不设置固定大小，让对话框根据内容自动调整
         
         # 保持旧版样式
         self.setStyleSheet("""
@@ -171,11 +171,10 @@ class ConfigDialog(QDialog):
         """)
         
         self.setup_ui()
-        self.load_current_config()
-        
+
         # 设置窗口自适应内容
         self.adjustSize()
-        
+
         # 确保窗口不会太小
         if self.height() < 500:
             self.resize(self.width(), 500)
@@ -202,8 +201,13 @@ class ConfigDialog(QDialog):
         button_layout.addWidget(self.save_btn)
         button_layout.addWidget(self.cancel_btn)
         button_layout.addStretch()
-        
+
         layout.addLayout(button_layout)
+
+        # 加载配置并调整大小
+        self.load_current_config()
+        # 调整对话框大小以适应内容
+        self.adjustSize()
     
     def setup_accounting_ui(self, layout):
         """设置记账服务UI"""
@@ -257,26 +261,296 @@ class ConfigDialog(QDialog):
         layout.addWidget(self.account_status_label)
     
     def setup_wechat_ui(self, layout):
-        """设置微信监控UI"""
-        # 启用监控
+        """设置微信配置UI - 基于旧版本的完整功能"""
+        # 1. 自动化库选择功能
+        layout.addWidget(QLabel("微信自动化库选择:"))
+
+        # 创建单选框组
+        self.library_group = QButtonGroup()
+        library_layout = QHBoxLayout()
+
+        self.wxauto_radio = QRadioButton("wxauto (开源版)")
+        self.wxautox_radio = QRadioButton("wxautox (Plus版)")
+
+        # 设置单选框样式
+        radio_style = """
+            QRadioButton {
+                color: white;
+                font-size: 14px;
+                font-weight: bold;
+                spacing: 8px;
+                padding: 4px;
+            }
+            QRadioButton::indicator {
+                width: 16px;
+                height: 16px;
+                border-radius: 8px;
+                border: 2px solid #64748b;
+                background-color: transparent;
+            }
+            QRadioButton::indicator:checked {
+                background-color: #3b82f6;
+                border-color: #3b82f6;
+            }
+            QRadioButton::indicator:hover {
+                border-color: #64748b;
+            }
+        """
+
+        self.wxauto_radio.setStyleSheet(radio_style)
+        self.wxautox_radio.setStyleSheet(radio_style)
+
+        self.library_group.addButton(self.wxauto_radio, 0)
+        self.library_group.addButton(self.wxautox_radio, 1)
+
+        # 连接信号
+        self.wxauto_radio.toggled.connect(self.on_library_changed)
+        self.wxautox_radio.toggled.connect(self.on_library_changed)
+
+        library_layout.addWidget(self.wxauto_radio)
+        library_layout.addWidget(self.wxautox_radio)
+        library_layout.addStretch()
+
+        library_widget = QWidget()
+        library_widget.setLayout(library_layout)
+        layout.addWidget(library_widget)
+
+        # 显示库状态
+        self.wxauto_status_label = QLabel("检查中...")
+        self.wxautox_status_label = QLabel("检查中...")
+
+        status_layout = QHBoxLayout()
+        status_layout.addWidget(QLabel("wxauto状态:"))
+        status_layout.addWidget(self.wxauto_status_label)
+        status_layout.addWidget(QLabel("wxautox状态:"))
+        status_layout.addWidget(self.wxautox_status_label)
+        status_layout.addStretch()
+
+        status_widget = QWidget()
+        status_widget.setLayout(status_layout)
+        layout.addWidget(status_widget)
+
+        # 检查库状态
+        self.check_library_status()
+
+        # 2. wxautox激活功能区域
+        self.activation_widget = QWidget()
+        activation_layout = QVBoxLayout(self.activation_widget)
+
+        activation_layout.addWidget(QLabel("wxautox激活码:"))
+
+        activation_input_layout = QHBoxLayout()
+        self.activation_code_edit = QLineEdit()
+        self.activation_code_edit.setPlaceholderText("请输入wxautox激活码")
+        self.activation_btn = QPushButton("激活")
+        self.activation_btn.clicked.connect(self.activate_wxautox)
+
+        activation_input_layout.addWidget(self.activation_code_edit)
+        activation_input_layout.addWidget(self.activation_btn)
+
+        activation_layout.addLayout(activation_input_layout)
+
+        # 激活状态显示
+        self.activation_status_label = QLabel("")
+        activation_layout.addWidget(self.activation_status_label)
+
+        layout.addWidget(self.activation_widget)
+
+        # 默认隐藏激活区域
+        self.activation_widget.setVisible(False)
+
+        # 3. 监听会话管理
+        layout.addWidget(QLabel("监听会话管理:"))
+
+        # 会话列表和操作按钮
+        sessions_layout = QHBoxLayout()
+
+        # 左侧：会话列表
+        sessions_left_layout = QVBoxLayout()
+        sessions_left_layout.addWidget(QLabel("当前监听会话:"))
+
+        self.sessions_list = QListWidget()
+        self.sessions_list.setMaximumHeight(120)
+        sessions_left_layout.addWidget(self.sessions_list)
+
+        # 右侧：操作按钮
+        sessions_right_layout = QVBoxLayout()
+
+        # 添加会话
+        add_session_layout = QHBoxLayout()
+        self.session_input = QLineEdit()
+        self.session_input.setPlaceholderText("输入会话名称")
+        self.add_session_btn = QPushButton("添加会话")
+        self.add_session_btn.clicked.connect(self.add_session)
+
+        add_session_layout.addWidget(self.session_input)
+        add_session_layout.addWidget(self.add_session_btn)
+        sessions_right_layout.addLayout(add_session_layout)
+
+        # 删除会话
+        self.remove_session_btn = QPushButton("删除选中会话")
+        self.remove_session_btn.clicked.connect(self.remove_session)
+        sessions_right_layout.addWidget(self.remove_session_btn)
+
+        sessions_right_layout.addStretch()
+
+        sessions_layout.addLayout(sessions_left_layout, 2)
+        sessions_layout.addLayout(sessions_right_layout, 1)
+
+        sessions_widget = QWidget()
+        sessions_widget.setLayout(sessions_layout)
+        layout.addWidget(sessions_widget)
+
+        # 4. 监听间隔设置
+        layout.addWidget(QLabel("监听间隔设置:"))
+
+        interval_layout = QHBoxLayout()
+        interval_layout.addWidget(QLabel("检查间隔:"))
+
+        self.interval_spinbox = QSpinBox()
+        self.interval_spinbox.setRange(1, 300)
+        self.interval_spinbox.setValue(5)
+        self.interval_spinbox.setSuffix(" 秒")
+
+        interval_layout.addWidget(self.interval_spinbox)
+        interval_layout.addStretch()
+
+        interval_widget = QWidget()
+        interval_widget.setLayout(interval_layout)
+        layout.addWidget(interval_widget)
+
+        # 5. 其他配置选项
         self.enabled_check = QCheckBox("启用微信监控")
         layout.addWidget(self.enabled_check)
-        
-        # 监控聊天列表
-        layout.addWidget(QLabel("监控聊天列表 (每行一个):"))
-        self.chats_edit = QTextEdit()
-        self.chats_edit.setMaximumHeight(100)
-        layout.addWidget(self.chats_edit)
-        
-        # 自动回复
+
         self.auto_reply_check = QCheckBox("启用自动回复")
         layout.addWidget(self.auto_reply_check)
-        
-        # 回复模板
+
         layout.addWidget(QLabel("回复模板:"))
         self.template_edit = QLineEdit()
+        self.template_edit.setPlaceholderText("自动回复的消息模板")
         layout.addWidget(self.template_edit)
-    
+
+    def check_library_status(self):
+        """检查wxauto和wxautox库的安装状态"""
+        try:
+            # 检查wxauto
+            try:
+                import wxauto
+                self.wxauto_status_label.setText("✓ 已安装")
+                self.wxauto_status_label.setStyleSheet("color: #10b981; font-weight: bold;")
+            except ImportError:
+                self.wxauto_status_label.setText("✗ 未安装")
+                self.wxauto_status_label.setStyleSheet("color: #ef4444; font-weight: bold;")
+
+            # 检查wxautox
+            try:
+                import wxautox
+                self.wxautox_status_label.setText("✓ 已安装")
+                self.wxautox_status_label.setStyleSheet("color: #10b981; font-weight: bold;")
+            except ImportError:
+                self.wxautox_status_label.setText("✗ 未安装")
+                self.wxautox_status_label.setStyleSheet("color: #ef4444; font-weight: bold;")
+
+        except Exception as e:
+            logger.error(f"检查库状态失败: {e}")
+
+    def on_library_changed(self):
+        """库选择变化时的处理"""
+        if hasattr(self, 'wxautox_radio') and self.wxautox_radio.isChecked():
+            # 选择wxautox时显示激活区域
+            self.activation_widget.setVisible(True)
+        else:
+            # 选择wxauto时隐藏激活区域
+            self.activation_widget.setVisible(False)
+
+        # 调整对话框大小以适应内容
+        self.adjustSize()
+
+    def activate_wxautox(self):
+        """激活wxautox"""
+        activation_code = self.activation_code_edit.text().strip()
+        if not activation_code:
+            QMessageBox.warning(self, "警告", "请输入激活码")
+            return
+
+        try:
+            import subprocess
+            import sys
+
+            # 执行激活命令
+            self.activation_btn.setEnabled(False)
+            self.activation_btn.setText("激活中...")
+            self.activation_status_label.setText("正在激活...")
+            self.activation_status_label.setStyleSheet("color: #fbbf24;")
+
+            # 使用subprocess执行激活命令
+            result = subprocess.run(
+                [sys.executable, "-m", "wxautox", "-a", activation_code],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            if result.returncode == 0:
+                self.activation_status_label.setText("✓ 激活成功")
+                self.activation_status_label.setStyleSheet("color: #10b981; font-weight: bold;")
+                QMessageBox.information(self, "成功", "wxautox激活成功！")
+            else:
+                error_msg = result.stderr or result.stdout or "激活失败"
+                self.activation_status_label.setText(f"✗ 激活失败: {error_msg}")
+                self.activation_status_label.setStyleSheet("color: #ef4444; font-weight: bold;")
+                QMessageBox.warning(self, "失败", f"激活失败: {error_msg}")
+
+        except subprocess.TimeoutExpired:
+            self.activation_status_label.setText("✗ 激活超时")
+            self.activation_status_label.setStyleSheet("color: #ef4444; font-weight: bold;")
+            QMessageBox.warning(self, "超时", "激活请求超时，请检查网络连接")
+        except Exception as e:
+            self.activation_status_label.setText(f"✗ 激活错误: {str(e)}")
+            self.activation_status_label.setStyleSheet("color: #ef4444; font-weight: bold;")
+            QMessageBox.critical(self, "错误", f"激活过程中发生错误: {str(e)}")
+        finally:
+            self.activation_btn.setEnabled(True)
+            self.activation_btn.setText("激活")
+
+    def add_session(self):
+        """添加监控会话"""
+        session_name = self.session_input.text().strip()
+        if not session_name:
+            QMessageBox.warning(self, "警告", "请输入会话名称")
+            return
+
+        # 检查是否已存在
+        for i in range(self.sessions_list.count()):
+            if self.sessions_list.item(i).text() == session_name:
+                QMessageBox.warning(self, "警告", "该会话已存在")
+                return
+
+        # 添加到列表
+        self.sessions_list.addItem(session_name)
+        self.session_input.clear()
+        logger.info(f"添加监控会话: {session_name}")
+
+    def remove_session(self):
+        """删除选中的会话"""
+        current_item = self.sessions_list.currentItem()
+        if not current_item:
+            QMessageBox.warning(self, "警告", "请选择要删除的会话")
+            return
+
+        session_name = current_item.text()
+        reply = QMessageBox.question(
+            self, "确认删除",
+            f"确定要删除会话 '{session_name}' 吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            row = self.sessions_list.row(current_item)
+            self.sessions_list.takeItem(row)
+            logger.info(f"删除监控会话: {session_name}")
+
     def load_current_config(self):
         """加载当前配置"""
         if not self.config_manager:
@@ -303,11 +577,33 @@ class ConfigDialog(QDialog):
                             self.account_status_label.setStyleSheet("color: #22c55e; font-size: 11px;")
 
             elif self.config_type == "微信监控服务":
-                config = self.config_manager.get_wechat_monitor_config()
-                self.enabled_check.setChecked(config.enabled)
-                self.chats_edit.setPlainText('\n'.join(config.monitored_chats))
-                self.auto_reply_check.setChecked(config.auto_reply)
-                self.template_edit.setText(config.reply_template)
+                # 加载微信监控配置
+                wechat_config = self.config_manager.get_wechat_monitor_config()
+                wxauto_config = self.config_manager.get_wxauto_config()
+
+                # 设置库选择
+                library_type = wxauto_config.library_type
+                if library_type == "wxauto":
+                    self.wxauto_radio.setChecked(True)
+                else:
+                    self.wxautox_radio.setChecked(True)
+
+                # 触发库选择变化事件
+                self.on_library_changed()
+
+                # 加载监控会话列表
+                self.sessions_list.clear()
+                for chat in wechat_config.monitored_chats:
+                    self.sessions_list.addItem(chat)
+
+                # 设置监听间隔（从服务监控配置获取）
+                service_config = self.config_manager.get_service_monitor_config()
+                self.interval_spinbox.setValue(service_config.message_check_interval)
+
+                # 设置其他配置
+                self.enabled_check.setChecked(wechat_config.enabled)
+                self.auto_reply_check.setChecked(wechat_config.auto_reply)
+                self.template_edit.setText(wechat_config.reply_template)
 
         except Exception as e:
             logger.error(f"加载配置失败: {e}")
@@ -475,17 +771,33 @@ class ConfigDialog(QDialog):
                     
             elif self.config_type == "微信监控服务":
                 # 保存微信配置
-                monitored_chats = [
-                    chat.strip() for chat in self.chats_edit.toPlainText().split('\n') 
-                    if chat.strip()
-                ]
-                
-                success = self.config_manager.update_wechat_monitor_config(
+                # 获取监控会话列表
+                monitored_chats = []
+                for i in range(self.sessions_list.count()):
+                    monitored_chats.append(self.sessions_list.item(i).text())
+
+                # 获取选中的库类型
+                library_type = 'wxauto' if self.wxauto_radio.isChecked() else 'wxautox'
+
+                # 保存wxauto配置
+                wxauto_success = self.config_manager.update_wxauto_config(
+                    library_type=library_type
+                )
+
+                # 保存微信监控配置
+                wechat_success = self.config_manager.update_wechat_monitor_config(
                     enabled=self.enabled_check.isChecked(),
                     monitored_chats=monitored_chats,
                     auto_reply=self.auto_reply_check.isChecked(),
                     reply_template=self.template_edit.text().strip()
                 )
+
+                # 保存监听间隔到服务监控配置
+                service_success = self.config_manager.update_service_monitor_config(
+                    message_check_interval=self.interval_spinbox.value()
+                )
+
+                success = wxauto_success and wechat_success and service_success
                 
                 if success:
                     QMessageBox.information(self, "成功", "微信监控配置保存成功！")
@@ -578,139 +890,115 @@ class LegacyMainWindow(QMainWindow):
             QMessageBox.critical(self, "错误", f"模块初始化失败: {str(e)}")
     
     def init_ui(self):
-        """初始化UI - 使用simple_main_window样式"""
-        self.setWindowTitle("只为记账-微信助手")
-        self.setFixedSize(800, 600)
+        """初始化UI - 使用增强版美化组件"""
+        self.setWindowTitle("只为记账--微信助手")
+        self.setFixedSize(520, 680)  # 稍微增大以容纳阴影效果
 
-        # 设置深色主题（保持simple_main_window样式）
-        self.setStyleSheet("""
-            QMainWindow {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #0f172a, stop:1 #1e293b);
-                color: white;
-            }
-            QWidget {
-                background: transparent;
-                color: white;
-            }
-            QLabel {
-                color: white;
-                font-family: 'Microsoft YaHei';
-            }
-        """)
-
-        # 创建中央部件
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        # 创建纹理背景
+        self.textured_background = TexturedBackground()
+        self.setCentralWidget(self.textured_background)
 
         # 主布局
-        main_layout = QVBoxLayout(central_widget)
-        main_layout.setSpacing(20)
-        main_layout.setContentsMargins(30, 30, 30, 30)
+        main_layout = QVBoxLayout(self.textured_background)
+        main_layout.setSpacing(35)
+        main_layout.setContentsMargins(45, 45, 45, 45)
 
         # 标题
-        title_label = QLabel("只为记账-微信助手")
+        title_label = QLabel("只为记账--微信助手")
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_label.setFont(QFont("Microsoft YaHei", 24, QFont.Weight.Bold))
-        title_label.setStyleSheet("color: #3b82f6; margin-bottom: 20px;")
+        title_label.setStyleSheet("""
+            QLabel {
+                color: white;
+                font-size: 28px;
+                font-weight: bold;
+                margin: 20px 0;
+            }
+        """)
         main_layout.addWidget(title_label)
 
-        # 主控制区域
-        control_layout = QHBoxLayout()
+        # 状态指示器区域
+        status_layout = QHBoxLayout()
+        status_layout.setSpacing(20)
 
-        # 左侧：主控按钮
-        left_layout = QVBoxLayout()
-        left_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # 只为记账服务状态
+        self.accounting_indicator = EnhancedStatusIndicator(
+            "只为记账服务",
+            "账号: zhangjie@jacksonz.cn\n联系: 我们的家庭账本"
+        )
+        self.accounting_indicator.clicked.connect(lambda: self.open_config_dialog('只为记账服务'))
+        status_layout.addWidget(self.accounting_indicator)
 
-        self.main_button = CircularButton("开始监听")
+        # 微信状态
+        self.wechat_indicator = EnhancedStatusIndicator(
+            "微信监控服务",
+            "wxauto: 已加载\n微信: 助手"
+        )
+        self.wechat_indicator.clicked.connect(lambda: self.open_config_dialog('微信监控服务'))
+        status_layout.addWidget(self.wechat_indicator)
+
+        main_layout.addLayout(status_layout)
+
+        # 主控按钮
+        button_layout = QVBoxLayout()
+
+        # 按钮容器
+        btn_container = QHBoxLayout()
+        btn_container.addStretch()
+
+        self.main_button = EnhancedCircularButton("开始监听")
         self.main_button.clicked.connect(self.toggle_monitoring)
-        left_layout.addWidget(self.main_button)
+        btn_container.addWidget(self.main_button)
 
-        # 状态文本
-        self.status_text = QLabel("点击开始监听")
-        self.status_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_text.setFont(QFont("Microsoft YaHei", 12))
-        self.status_text.setStyleSheet("color: #64748b; margin-top: 10px;")
-        left_layout.addWidget(self.status_text)
+        btn_container.addStretch()
+        button_layout.addLayout(btn_container)
 
-        control_layout.addLayout(left_layout)
-        control_layout.addSpacing(50)
-
-        # 右侧：状态指示器
-        right_layout = QVBoxLayout()
-
-        # 服务状态指示器
-        self.accounting_indicator = StatusIndicator("只为记账服务", "未连接")
-        self.accounting_indicator.clicked.connect(lambda: self.open_config_dialog("只为记账服务"))
-        right_layout.addWidget(self.accounting_indicator)
-
-        self.wechat_indicator = StatusIndicator("微信监控服务", "未连接")
-        self.wechat_indicator.clicked.connect(lambda: self.open_config_dialog("微信监控服务"))
-        right_layout.addWidget(self.wechat_indicator)
-
-        control_layout.addLayout(right_layout)
-        main_layout.addLayout(control_layout)
-
-        # 统计区域
-        stats_frame = QFrame()
-        stats_frame.setStyleSheet("""
-            QFrame {
-                background-color: rgba(30, 41, 59, 0.8);
-                border: 1px solid #334155;
-                border-radius: 8px;
-                padding: 15px;
-            }
-        """)
-
-        stats_layout = QVBoxLayout(stats_frame)
-
-        stats_title = QLabel("统计信息")
-        stats_title.setFont(QFont("Microsoft YaHei", 14, QFont.Weight.Bold))
-        stats_title.setStyleSheet("color: #f1f5f9; margin-bottom: 10px;")
-        stats_layout.addWidget(stats_title)
-
-        # 统计卡片
-        cards_layout = QHBoxLayout()
-
-        self.total_card = StatCard("处理总数", 0)
-        self.success_card = StatCard("成功记账", 0)
-        self.failed_card = StatCard("失败记账", 0)
-        self.irrelevant_card = StatCard("失效记录", 0)
-
-        cards_layout.addWidget(self.total_card)
-        cards_layout.addWidget(self.success_card)
-        cards_layout.addWidget(self.failed_card)
-        cards_layout.addWidget(self.irrelevant_card)
-        cards_layout.addStretch()
-
-        stats_layout.addLayout(cards_layout)
-        main_layout.addWidget(stats_frame)
-
-        # 操作按钮区域
-        buttons_layout = QHBoxLayout()
-
-        self.logs_btn = QPushButton("日志窗口")
-        self.logs_btn.clicked.connect(self.show_logs)
-        self.logs_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #475569;
-                border: none;
-                border-radius: 6px;
-                padding: 10px 20px;
-                color: white;
+        # 进度显示标签
+        self.progress_label = QLabel("")
+        self.progress_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.progress_label.setStyleSheet("""
+            QLabel {
+                color: #f59e0b;
+                font-size: 14px;
                 font-weight: bold;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #64748b;
+                margin: 10px 0;
+                padding: 5px;
+                background: rgba(245, 158, 11, 0.1);
+                border-radius: 5px;
+                min-height: 20px;
             }
         """)
+        self.progress_label.hide()  # 初始隐藏
+        button_layout.addWidget(self.progress_label)
 
-        buttons_layout.addWidget(self.logs_btn)
-        buttons_layout.addStretch()
+        main_layout.addLayout(button_layout)
 
-        main_layout.addLayout(buttons_layout)
-        main_layout.addStretch()
+        # 统计卡片区域
+        stats_layout = QHBoxLayout()
+        stats_layout.setSpacing(15)
+
+        self.processed_card = EnhancedStatCard("处理消息数", 0)
+        self.success_card = EnhancedStatCard("成功记账数", 0)
+        self.failed_card = EnhancedStatCard("失败记账数", 0)
+
+        stats_layout.addWidget(self.processed_card)
+        stats_layout.addWidget(self.success_card)
+        stats_layout.addWidget(self.failed_card)
+
+        main_layout.addLayout(stats_layout)
+
+        # 底部按钮 - 查看日志按钮
+        bottom_layout = QHBoxLayout()
+        bottom_layout.addStretch()
+
+        # 查看日志按钮 - 使用增强版按钮
+        log_btn = EnhancedButton("查看日志")
+        log_btn.clicked.connect(self.show_logs)
+        bottom_layout.addWidget(log_btn)
+
+        main_layout.addLayout(bottom_layout)
+
+        # 启动纹理动画（可选）
+        # self.textured_background.start_texture_animation()
 
     def open_config_dialog(self, config_type):
         """打开配置对话框"""
@@ -1016,10 +1304,18 @@ class LegacyMainWindow(QMainWindow):
 
     def update_stats_display(self):
         """更新统计显示"""
-        self.total_card.set_value(self.stats['total_processed'])
+        self.processed_card.set_value(self.stats['total_processed'])
         self.success_card.set_value(self.stats['successful_accounting'])
         self.failed_card.set_value(self.stats['failed_accounting'])
-        self.irrelevant_card.set_value(self.stats['irrelevant_messages'])
+
+    def update_progress(self, message: str):
+        """更新进度显示"""
+        try:
+            if hasattr(self, 'progress_label'):
+                self.progress_label.setText(message)
+                self.progress_label.show()
+        except Exception as e:
+            logger.error(f"更新进度显示失败: {e}")
 
     # 用户交互方法
 
@@ -1028,21 +1324,32 @@ class LegacyMainWindow(QMainWindow):
         try:
             if not self.is_monitoring:
                 # 开始监控
+                self.update_progress("正在启动监控...")
                 if self.start_monitoring():
                     self.is_monitoring = True
                     self.main_button.set_listening_state(True)
-                    self.status_text.setText("监控运行中...")
-                    self.status_text.setStyleSheet("color: #22c55e;")
+                    self.update_progress("监控已启动")
+                    # 3秒后隐藏进度标签
+                    QTimer.singleShot(3000, lambda: self.progress_label.hide() if hasattr(self, 'progress_label') else None)
+                else:
+                    self.update_progress("监控启动失败")
+                    QTimer.singleShot(3000, lambda: self.progress_label.hide() if hasattr(self, 'progress_label') else None)
             else:
                 # 停止监控
+                self.update_progress("正在停止监控...")
                 if self.stop_monitoring():
                     self.is_monitoring = False
                     self.main_button.set_listening_state(False)
-                    self.status_text.setText("监控已停止")
-                    self.status_text.setStyleSheet("color: #64748b;")
+                    self.update_progress("监控已停止")
+                    QTimer.singleShot(3000, lambda: self.progress_label.hide() if hasattr(self, 'progress_label') else None)
+                else:
+                    self.update_progress("监控停止失败")
+                    QTimer.singleShot(3000, lambda: self.progress_label.hide() if hasattr(self, 'progress_label') else None)
 
         except Exception as e:
             logger.error(f"切换监控状态失败: {e}")
+            self.update_progress(f"操作失败: {str(e)}")
+            QTimer.singleShot(3000, lambda: self.progress_label.hide() if hasattr(self, 'progress_label') else None)
             QMessageBox.warning(self, "错误", f"切换监控状态失败: {str(e)}")
 
     def start_monitoring(self) -> bool:
