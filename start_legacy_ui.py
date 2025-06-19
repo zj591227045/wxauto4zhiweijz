@@ -6,23 +6,51 @@
 """
 
 import sys
-import os
 import logging
 from pathlib import Path
 
-# 添加项目根目录到Python路径
-project_root = Path(__file__).parent
+# 检测是否为打包后的exe文件
+if getattr(sys, 'frozen', False):
+    # 打包后的exe文件
+    project_root = Path(sys.executable).parent
+else:
+    # 开发环境
+    project_root = Path(__file__).parent
+
 sys.path.insert(0, str(project_root))
 
-# 设置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(project_root / "data" / "Logs" / "legacy_app.log", encoding='utf-8')
-    ]
-)
+def setup_logging():
+    """设置日志系统，处理打包后的路径问题"""
+    try:
+        # 确保日志目录存在
+        log_dir = project_root / "data" / "Logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        # 设置日志文件路径
+        log_file = log_dir / "legacy_app.log"
+
+        # 配置日志
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.StreamHandler(),
+                logging.FileHandler(log_file, encoding='utf-8')
+            ]
+        )
+        return True
+    except Exception as e:
+        # 如果无法创建日志文件，只使用控制台输出
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[logging.StreamHandler()]
+        )
+        print(f"警告：无法创建日志文件，仅使用控制台输出: {e}")
+        return False
+
+# 初始化日志系统
+setup_logging()
 
 logger = logging.getLogger(__name__)
 

@@ -6,6 +6,7 @@
 import logging
 import json
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -159,15 +160,21 @@ class ConfigManager(ConfigurableService):
     
     def __init__(self, config_file: str = None, parent=None):
         super().__init__("config_manager", parent)
-        
+
         # 配置文件路径
         if config_file:
             self.config_file = Path(config_file)
         else:
-            # 默认配置文件路径
-            project_root = Path(__file__).parent.parent.parent
+            # 检测是否为打包后的exe文件
+            if getattr(sys, 'frozen', False):
+                # 打包后的exe文件 - 使用exe文件所在目录
+                project_root = Path(sys.executable).parent
+            else:
+                # 开发环境 - 使用项目根目录
+                project_root = Path(__file__).parent.parent.parent
+
             self.config_file = project_root / "data" / "config.json"
-        
+
         # 确保配置目录存在
         self.config_file.parent.mkdir(parents=True, exist_ok=True)
         

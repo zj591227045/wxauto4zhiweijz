@@ -39,11 +39,14 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('data', 'data'),
-        ('config', 'config'),
+        # 注意：排除data目录以防止敏感配置信息被打包
+        # data目录包含用户名、密码、token等敏感信息，不应包含在分发包中
+        # 用户需要在首次运行时自行配置这些信息
+        ('app', 'app'),
         ('icons', 'icons'),
         ('README.md', '.'),
         ('requirements.txt', '.'),
+        ('config_template.json', '.'),
     ],
     hiddenimports=[
         # PyQt6 核心模块
@@ -213,6 +216,8 @@ echo.
 echo 使用说明：
 echo 1. 双击"只为记账微信助手.exe"启动程序
 echo 2. 首次使用需要配置记账服务信息
+echo    - 参考config_template.json文件进行配置
+echo    - 程序会自动创建data目录和配置文件
 echo 3. 添加要监控的微信聊天对象
 echo 4. 点击"开始监听"即可自动记账
 echo.
@@ -257,6 +262,10 @@ def main():
         print("✓ 打包完成！")
         print(f"✓ 可执行文件位置: {os.path.abspath('dist')}")
         print("✓ 可以将dist目录下的所有文件分发给用户")
+        print("\n🔒 安全提示：")
+        print("- data目录已被排除在打包文件之外，防止敏感配置信息泄露")
+        print("- 用户需要在首次运行时自行配置记账服务信息")
+        print("- 请确保不要将包含敏感信息的配置文件分发给其他用户")
         print("\n使用方法：")
         print("1. 将dist目录复制到目标计算机")
         print("2. 运行install.bat进行安装")

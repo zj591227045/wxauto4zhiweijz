@@ -839,8 +839,9 @@ class AccountingManager(ConfigurableService, IAccountingManager):
                 # 记账成功，格式化详细信息
                 message_lines = ["✅ 记账成功！"]
 
-                # 基本信息
-                description = smart_result.get('originalDescription', smart_result.get('description', ''))
+                # 基本信息 - 使用note字段作为明细，而不是originalDescription
+                # note字段包含处理后的记账明细（如"买香蕉"），originalDescription包含原始消息（如"买香蕉，27元"）
+                description = smart_result.get('note', smart_result.get('description', ''))
                 if description:
                     message_lines.append(f"📝 明细：{description}")
 
@@ -888,14 +889,15 @@ class AccountingManager(ConfigurableService, IAccountingManager):
                 if amount:
                     message_lines.append(f"💰 金额：{amount}元")
 
-                # 预算信息
+                # 预算信息 - 只有当budgetName等于"个人预算"时才显示所有者姓名
                 budget_name = smart_result.get('budgetName', smart_result.get('budget', ''))
                 budget_owner = smart_result.get('budgetOwnerName', smart_result.get('budgetOwner', ''))
 
-                if budget_name and budget_owner:
-                    message_lines.append(f"📊 预算：{budget_name}（{budget_owner}）")
-                elif budget_name:
-                    message_lines.append(f"📊 预算：{budget_name}")
+                if budget_name:
+                    if budget_name == "个人预算" and budget_owner:
+                        message_lines.append(f"📊 预算：{budget_name}（{budget_owner}）")
+                    else:
+                        message_lines.append(f"📊 预算：{budget_name}")
 
                 return "\n".join(message_lines)
             else:

@@ -7,6 +7,7 @@ import logging
 import threading
 import time
 import os
+import sys
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from collections import deque
@@ -131,16 +132,30 @@ class LogManager(BaseService, ILogManager):
     
     def __init__(self, log_dir: str = None, parent=None):
         super().__init__("log_manager", parent)
-        
+
         # 日志目录
         if log_dir:
             self.log_dir = Path(log_dir)
         else:
-            # 默认使用项目根目录下的data/Logs
-            project_root = Path(__file__).parent.parent.parent
+            # 检测是否为打包后的exe文件
+            if getattr(sys, 'frozen', False):
+                # 打包后的exe文件 - 使用exe文件所在目录
+                project_root = Path(sys.executable).parent
+            else:
+                # 开发环境 - 使用项目根目录
+                project_root = Path(__file__).parent.parent.parent
+
             self.log_dir = project_root / "data" / "Logs"
-        
-        self.log_dir.mkdir(parents=True, exist_ok=True)
+
+        # 确保日志目录存在，如果创建失败则使用临时目录
+        try:
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            # 如果无法创建日志目录，使用系统临时目录
+            import tempfile
+            self.log_dir = Path(tempfile.gettempdir()) / "wxauto_logs"
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+            logger.warning(f"无法创建默认日志目录，使用临时目录: {self.log_dir}, 错误: {e}")
         
         # 内存日志处理器
         self.memory_handler = EnhancedMemoryLogHandler(capacity=1000, log_manager=self)

@@ -1,0 +1,90 @@
+{
+  "version": "1.0.0",
+  "accounting": {
+    "server_url": "https://app.zhiweijz.cn",
+    "username": "your_username@example.com",
+    "password": "your_password",
+    "account_book_id": "your_account_book_id",
+    "account_book_name": "your_account_book_name",
+    "auto_login": true,
+    "token_refresh_interval": 300,
+    "request_timeout": 30,
+    "max_retries": 3
+  },
+  "wechat_monitor": {
+    "enabled": true,
+    "monitored_chats": [
+      "监控对象1",
+      "监控对象2"
+    ],
+    "auto_reply": false,
+    "reply_template": "",
+    "max_retry_count": 3,
+    "connection_timeout": 30,
+    "message_filter_enabled": false,
+    "message_filter_keywords": []
+  },
+  "wxauto": {
+    "library_type": "wxauto",
+    "auto_init": true,
+    "connection_timeout": 30,
+    "max_retry_count": 3,
+    "save_path": "",
+    "enable_logging": true,
+    "wxautox_port": 39999,
+    "wxautox_host": "127.0.0.1",
+    "wxautox_timeout": 30
+  },
+  "log": {
+    "level": "INFO",
+    "console_output": true,
+    "file_output": true,
+    "max_file_size": 10485760,
+    "max_files": 10,
+    "auto_rotate": true,
+    "log_format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "level_filter": null,
+    "module_filter": null,
+    "error_log_separate": true,
+    "performance_log_enabled": false
+  },
+  "service_monitor": {
+    "enabled": true,
+    "global_check_interval": 30,
+    "max_concurrent_recoveries": 2,
+    "auto_recovery": true,
+    "recovery_cooldown": 300,
+    "alert_enabled": true,
+    "alert_threshold": 3,
+    "accounting_check_interval": 60,
+    "wechat_check_interval": 30,
+    "message_check_interval": 10
+  },
+  "ui": {
+    "theme": "default",
+    "window_width": 800,
+    "window_height": 600,
+    "window_x": -1,
+    "window_y": -1,
+    "auto_scroll_logs": true,
+    "log_display_limit": 1000,
+    "show_debug_info": false,
+    "minimize_to_tray": true,
+    "start_minimized": false
+  },
+  "system": {
+    "data_dir": "data",
+    "temp_dir": "data/temp",
+    "backup_dir": "data/backup",
+    "config_file": "data/config.json",
+    "state_file": "data/app_state.json",
+    "auto_backup": true,
+    "backup_interval": 3600,
+    "max_backups": 10,
+    "max_memory_usage": 536870912,
+    "gc_interval": 300
+  },
+  "created_time": "",
+  "last_modified": "",
+  "last_backup": ""
+}
