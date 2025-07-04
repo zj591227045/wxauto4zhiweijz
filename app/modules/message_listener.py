@@ -46,6 +46,10 @@ class MessageListener(BaseService, IMessageListener):
         
         self.wxauto_manager = wxauto_manager
         self._lock = threading.RLock()
+
+        # 连接wxauto管理器的消息信号（用于回调模式）
+        if self.wxauto_manager:
+            self.wxauto_manager.messages_received.connect(self._on_wxauto_messages_received)
         
         # 监听状态
         self._is_listening = False
@@ -63,6 +67,7 @@ class MessageListener(BaseService, IMessageListener):
         # 监听配置
         self._poll_interval = 5.0  # 5秒轮询一次 - 符合用户需求
         self._max_messages_per_poll = 50  # 每次最多处理50条消息
+        self._use_callback_mode = True  # 是否使用回调模式（新的监听方法）
         
         # 统计信息
         self._stats = {
@@ -376,56 +381,90 @@ class MessageListener(BaseService, IMessageListener):
 
     def _listen_loop(self):
         """监听循环"""
-        logger.info("消息监听循环开始")
-        consecutive_errors = 0
-        max_consecutive_errors = 5
-
-        while not self._stop_listening.is_set():
-            try:
+        if self._use_callback_mode:
+            logger.info("消息监听循环开始（回调模式）")
+            # 在回调模式下，消息通过wxauto_manager的回调直接处理
+            # 这里只需要保持线程活跃，等待停止信号
+            while not self._stop_listening.is_set():
                 self._stats['last_poll_time'] = time.time()
-                logger.debug(f"开始轮询消息，监听聊天: {self._monitored_chats}")
-
-                # 获取新消息
-                new_messages = self._poll_messages()
-
-                # 处理新消息
-                if new_messages:
-                    logger.info(f"获取到 {len(new_messages)} 条新消息，开始处理")
-                    self._process_new_messages(new_messages)
-                    consecutive_errors = 0  # 重置错误计数
-                else:
-                    logger.debug("本次轮询未获取到新消息")
-
-                # 等待下次轮询
+                # 在回调模式下，只需要等待停止信号
                 self._stop_listening.wait(self._poll_interval)
+        else:
+            logger.info("消息监听循环开始（轮询模式）")
+            consecutive_errors = 0
+            max_consecutive_errors = 5
 
-            except Exception as e:
-                consecutive_errors += 1
+            while not self._stop_listening.is_set():
+                try:
+                    self._stats['last_poll_time'] = time.time()
+                    logger.debug(f"开始轮询消息，监听聊天: {self._monitored_chats}")
 
-                # 对于常见的wxauto错误，降低日志级别
-                if any(error_text in str(e) for error_text in [
-                    "Find Control Timeout",
-                    "dictionary changed size during iteration",
-                    "控件查找超时"
-                ]):
-                    logger.debug(f"监听循环出现预期错误 ({consecutive_errors}/{max_consecutive_errors}): {e}")
-                else:
-                    logger.error(f"监听循环异常 ({consecutive_errors}/{max_consecutive_errors}): {e}")
-                    self.error_occurred.emit(f"监听循环异常: {str(e)}")
+                    # 获取新消息
+                    new_messages = self._poll_messages()
 
-                self._stats['error_count'] += 1
+                    # 处理新消息
+                    if new_messages:
+                        logger.info(f"获取到 {len(new_messages)} 条新消息，开始处理")
+                        self._process_new_messages(new_messages)
+                        consecutive_errors = 0  # 重置错误计数
+                    else:
+                        logger.debug("本次轮询未获取到新消息")
 
-                # 如果连续错误过多，增加等待时间
-                if consecutive_errors >= max_consecutive_errors:
-                    logger.warning(f"连续错误过多，增加等待时间")
-                    self._stop_listening.wait(self._poll_interval * 5)
-                    consecutive_errors = 0  # 重置计数
-                else:
-                    # 出错时等待更长时间
-                    wait_time = self._poll_interval * min(consecutive_errors, 3)
-                    self._stop_listening.wait(wait_time)
+                    # 等待下次轮询
+                    self._stop_listening.wait(self._poll_interval)
+
+                except Exception as e:
+                    consecutive_errors += 1
+
+                    # 对于常见的wxauto错误，降低日志级别
+                    if any(error_text in str(e) for error_text in [
+                        "Find Control Timeout",
+                        "dictionary changed size during iteration",
+                        "控件查找超时"
+                    ]):
+                        logger.debug(f"监听循环出现预期错误 ({consecutive_errors}/{max_consecutive_errors}): {e}")
+                    else:
+                        logger.error(f"监听循环异常 ({consecutive_errors}/{max_consecutive_errors}): {e}")
+                        self.error_occurred.emit(f"监听循环异常: {str(e)}")
+
+                    self._stats['error_count'] += 1
+
+                    # 如果连续错误过多，增加等待时间
+                    if consecutive_errors >= max_consecutive_errors:
+                        logger.warning(f"连续错误过多，增加等待时间")
+                        self._stop_listening.wait(self._poll_interval * 5)
+                        consecutive_errors = 0  # 重置计数
+                    else:
+                        # 出错时等待更长时间
+                        wait_time = self._poll_interval * min(consecutive_errors, 3)
+                        self._stop_listening.wait(wait_time)
 
         logger.info("消息监听循环结束")
+
+    def _on_wxauto_messages_received(self, chat_name: str, messages: List[dict]):
+        """处理从wxauto管理器接收到的消息（回调模式）"""
+        try:
+            if not self._use_callback_mode:
+                # 如果不是回调模式，忽略这些消息
+                return
+
+            if not self._is_listening:
+                # 如果没有在监听，忽略消息
+                return
+
+            if chat_name not in self._monitored_chats:
+                # 如果不是监听的聊天，忽略消息
+                logger.debug(f"收到非监听聊天的消息，忽略: {chat_name}")
+                return
+
+            logger.info(f"通过回调接收到 {len(messages)} 条消息: {chat_name}")
+
+            # 处理消息（复用现有的处理逻辑）
+            self._process_new_messages(messages)
+
+        except Exception as e:
+            logger.error(f"处理wxauto回调消息失败: {e}")
+            self.error_occurred.emit(f"处理回调消息失败: {str(e)}")
 
     def _poll_messages(self) -> List[Dict[str, Any]]:
         """轮询消息"""

@@ -6,7 +6,7 @@ wxauto库管理模块
 import logging
 import threading
 import time
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Callable
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from .base_interfaces import (
@@ -370,7 +370,58 @@ class WxautoManager(BaseService, IWxautoManager):
         except Exception as e:
             logger.error(f"获取消息失败: {e}")
             return []
-    
+
+    def _message_callback(self, message, chat) -> None:
+        """消息回调函数，处理从AddListenChat接收到的消息
+
+        Args:
+            message: Message对象，包含消息内容和属性
+            chat: Chat对象或聊天名称字符串
+        """
+        try:
+            # 获取聊天名称
+            if hasattr(chat, 'nickname'):
+                chat_name = chat.nickname
+            elif hasattr(chat, 'name'):
+                chat_name = chat.name
+            elif isinstance(chat, str):
+                chat_name = chat
+            else:
+                # 尝试从字符串表示中提取聊天名称
+                chat_str = str(chat)
+                if '"' in chat_str:
+                    # 从 '<wxauto - Chat object("张杰")>' 中提取 "张杰"
+                    import re
+                    match = re.search(r'"([^"]+)"', chat_str)
+                    if match:
+                        chat_name = match.group(1)
+                    else:
+                        chat_name = chat_str
+                else:
+                    chat_name = chat_str
+
+            # 将Message对象转换为字典格式，与现有系统兼容
+            message_data = {
+                'content': getattr(message, 'content', ''),
+                'type': getattr(message, 'type', 'unknown'),
+                'attr': getattr(message, 'attr', 'unknown'),
+                'sender': getattr(message, 'sender', ''),
+                'sender_remark': getattr(message, 'sender_remark', ''),
+                'id': getattr(message, 'id', ''),
+                'message_type_name': getattr(message, 'message_type_name', ''),
+                'timestamp': time.time()  # 添加时间戳
+            }
+
+            logger.info(f"收到新消息回调: {chat_name} - {message_data['content'][:50]}...")
+
+            # 发出消息接收信号，与现有系统集成
+            self.messages_received.emit(chat_name, [message_data])
+
+        except Exception as e:
+            logger.error(f"处理消息回调失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
     def add_listen_chat(self, chat_name: str) -> bool:
         """添加监听聊天"""
         max_retries = 3
@@ -391,11 +442,14 @@ class WxautoManager(BaseService, IWxautoManager):
                     except Exception as e:
                         logger.debug(f"移除旧监听时出现错误（可忽略）: {e}")
 
-                    # 添加新的监听
+                    # 添加新的监听，传入回调函数
                     try:
-                        wx_instance.AddListenChat(chat_name)
+                        result = wx_instance.AddListenChat(chat_name, self._message_callback)
                         time.sleep(0.5)  # 短暂等待确保添加完成
-                        logger.info(f"添加监听聊天成功: {chat_name}")
+
+                        # 启动监听功能
+                        wx_instance.StartListening()
+                        logger.info(f"添加监听聊天成功并启动监听: {chat_name}, 结果: {result}")
                         return True
                     except Exception as e:
                         if "Find Control Timeout" in str(e):
