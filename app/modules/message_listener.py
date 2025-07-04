@@ -459,12 +459,70 @@ class MessageListener(BaseService, IMessageListener):
 
             logger.info(f"通过回调接收到 {len(messages)} 条消息: {chat_name}")
 
-            # 处理消息（复用现有的处理逻辑）
-            self._process_new_messages(messages)
+            # 过滤消息：忽略发送者是self以及系统类型的消息
+            filtered_messages = self._filter_messages(messages)
+
+            if filtered_messages:
+                logger.info(f"过滤后剩余 {len(filtered_messages)} 条消息需要处理")
+                # 确保每条消息都包含正确的chat_name
+                for msg in filtered_messages:
+                    if 'chat_name' not in msg or not msg['chat_name']:
+                        msg['chat_name'] = chat_name
+                # 处理消息（复用现有的处理逻辑）
+                self._process_new_messages(filtered_messages)
+            else:
+                logger.debug("所有消息都被过滤，无需处理")
 
         except Exception as e:
             logger.error(f"处理wxauto回调消息失败: {e}")
             self.error_occurred.emit(f"处理回调消息失败: {str(e)}")
+
+    def _filter_messages(self, messages: List[dict]) -> List[dict]:
+        """过滤消息：忽略发送者是self以及系统类型的消息"""
+        filtered_messages = []
+
+        for message in messages:
+            try:
+                sender = message.get('sender', '').lower()
+                attr = message.get('attr', '').lower()
+                message_type = message.get('type', '').lower()
+                content = message.get('content', '').strip()
+
+                # 过滤条件
+                should_filter = False
+                filter_reason = ""
+
+                # 1. 过滤发送者是self的消息
+                if sender == 'self':
+                    should_filter = True
+                    filter_reason = "发送者是self"
+
+                # 2. 过滤系统类型的消息
+                if attr == 'system' or message_type == 'system':
+                    should_filter = True
+                    filter_reason = "系统消息"
+
+                # 3. 过滤空消息
+                elif not content:
+                    should_filter = True
+                    filter_reason = "空消息"
+
+                # 4. 过滤特定的系统提示消息
+                elif content in ['以下为新消息', '新消息', '消息记录']:
+                    should_filter = True
+                    filter_reason = "系统提示消息"
+
+                if should_filter:
+                    logger.debug(f"过滤消息: {content[:30]}... (原因: {filter_reason})")
+                else:
+                    filtered_messages.append(message)
+                    logger.debug(f"保留消息: {content[:30]}... (发送者: {sender}, 类型: {attr})")
+
+            except Exception as e:
+                logger.warning(f"过滤消息时出错，保留该消息: {e}")
+                filtered_messages.append(message)
+
+        return filtered_messages
 
     def _poll_messages(self) -> List[Dict[str, Any]]:
         """轮询消息"""

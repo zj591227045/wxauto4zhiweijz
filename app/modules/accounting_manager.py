@@ -409,16 +409,52 @@ class AccountingManager(ConfigurableService, IAccountingManager):
                         self.accounting_completed.emit(False, error_msg, {})
                         return False, error_msg
                 
-                response.raise_for_status()
-                result = response.json()
-                
-                # 解析响应
-                success_msg = self._parse_accounting_response(result)
-                
-                self._stats['successful_requests'] += 1
-                logger.info("智能记账成功")
-                self.accounting_completed.emit(True, success_msg, result)
-                return True, success_msg
+                # 处理响应
+                if response.status_code == 200 or response.status_code == 201:
+                    # 成功响应
+                    result = response.json()
+                    success_msg = self._parse_accounting_response(result)
+
+                    self._stats['successful_requests'] += 1
+                    logger.info("智能记账成功")
+                    self.accounting_completed.emit(True, success_msg, result)
+                    return True, success_msg
+
+                elif response.status_code == 400:
+                    # 400错误可能是业务逻辑错误，需要特殊处理
+                    try:
+                        error_result = response.json()
+                        error_info = error_result.get('info', '')
+                        error_msg = error_result.get('error', '')
+
+                        # 如果是"消息与记账无关"，这是正常的业务逻辑
+                        if '消息与记账无关' in error_info or '记账无关' in error_info:
+                            self._stats['successful_requests'] += 1
+                            logger.info("消息与记账无关，跳过处理")
+                            self.accounting_completed.emit(True, "信息与记账无关", error_result)
+                            return True, "信息与记账无关"
+
+                        # 其他400错误
+                        elif error_msg:
+                            self._stats['failed_requests'] += 1
+                            logger.warning(f"记账请求被拒绝: {error_msg}")
+                            self.accounting_completed.emit(False, f"记账失败: {error_msg}", error_result)
+                            return False, f"记账失败: {error_msg}"
+                        else:
+                            self._stats['failed_requests'] += 1
+                            logger.warning(f"记账请求返回400: {response.text}")
+                            self.accounting_completed.emit(False, "记账请求格式错误", error_result)
+                            return False, "记账请求格式错误"
+
+                    except Exception as e:
+                        logger.error(f"解析400错误响应失败: {e}")
+                        self._stats['failed_requests'] += 1
+                        error_msg = f"记账请求失败: {response.text}"
+                        self.accounting_completed.emit(False, error_msg, {})
+                        return False, error_msg
+                else:
+                    # 其他HTTP错误
+                    response.raise_for_status()
                 
         except requests.exceptions.RequestException as e:
             self._stats['failed_requests'] += 1

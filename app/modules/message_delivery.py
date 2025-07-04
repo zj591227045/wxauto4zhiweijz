@@ -474,14 +474,7 @@ class MessageDelivery(BaseService, IMessageDelivery):
                 self._stats['completed_tasks'] += 1
             else:
                 self._stats['failed_tasks'] += 1
-
-                # 检查是否需要重试
-                if task.retry_count < task.max_retries:
-                    task.retry_count += 1
-                    logger.info(f"任务重试 {task.retry_count}/{task.max_retries}: {task.task_id}")
-
-                    # 重新加入队列
-                    self._add_task_to_queue(task)
+                # 移除重试机制：记账失败直接返回失败，不再重试
 
             # 发出任务完成信号
             self.task_completed.emit(

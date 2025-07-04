@@ -44,7 +44,10 @@ class WxautoManager(BaseService, IWxautoManager):
         
         # 初始化状态
         self._initialized = False
-        
+
+        # 监听聊天的Chat对象引用
+        self._listen_chats = {}  # {chat_name: Chat对象}
+
         logger.info("wxauto管理器初始化完成")
     
     def start(self) -> bool:
@@ -292,16 +295,73 @@ class WxautoManager(BaseService, IWxautoManager):
             if not wx_instance:
                 self.message_sent.emit(chat_name, False, "微信实例未初始化")
                 return False
-            
-            # 发送消息
-            wx_instance.SendMsg(message, chat_name)
-            
-            logger.info(f"消息发送成功: {chat_name} - {message[:50]}...")
-            self.message_sent.emit(chat_name, True, "发送成功")
-            return True
-            
+
+            # 发送消息并检查返回值
+            logger.info(f"准备发送消息到: '{chat_name}' - 内容: {message[:50]}...")
+
+            # 优先使用已监听的Chat对象发送消息，避免重新搜索和打开窗口
+            if chat_name in self._listen_chats:
+                try:
+                    chat_obj = self._listen_chats[chat_name]
+                    logger.info(f"使用已监听的Chat对象发送消息: '{chat_name}'")
+                    result = chat_obj.SendMsg(message)
+                    logger.info(f"Chat对象SendMsg调用完成: 目标='{chat_name}', 返回结果={result} (类型: {type(result)})")
+                except Exception as e:
+                    logger.warning(f"使用Chat对象发送失败: {e}, 回退到ChatWith方式")
+                    # 如果Chat对象发送失败，回退到原来的方式
+                    chat_obj = None
+                else:
+                    # Chat对象发送成功，跳过ChatWith方式
+                    chat_obj = "success"
+            else:
+                chat_obj = None
+
+            # 如果没有监听的Chat对象或Chat对象发送失败，使用ChatWith方式
+            if not chat_obj:
+                try:
+                    # 使用 ChatWith 方法切换到目标聊天
+                    switch_result = wx_instance.ChatWith(chat_name)
+                    logger.info(f"切换到聊天窗口: '{chat_name}', 结果: {switch_result}")
+
+                    # 短暂等待确保切换完成
+                    time.sleep(0.5)
+
+                except Exception as e:
+                    logger.warning(f"切换聊天窗口失败: {e}, 尝试直接发送")
+
+                # 发送消息
+                result = wx_instance.SendMsg(message, chat_name)
+                logger.info(f"SendMsg调用完成: 目标='{chat_name}', 返回结果={result} (类型: {type(result)})")
+
+            # 检查发送结果
+            if result is None:
+                # 如果返回None，可能是旧版本的wxauto，尝试不检查返回值
+                logger.warning("SendMsg返回None，可能是旧版本wxauto，假设发送成功")
+                self.message_sent.emit(chat_name, True, "发送成功（未验证）")
+                return True
+            elif hasattr(result, 'is_success') and result.is_success:
+                logger.info(f"消息发送成功: {chat_name} - {message[:50]}...")
+                self.message_sent.emit(chat_name, True, "发送成功")
+                return True
+            elif hasattr(result, 'is_success') and not result.is_success:
+                error_msg = f"消息发送失败: {result.get('message', '未知错误')}"
+                logger.error(error_msg)
+                self.message_sent.emit(chat_name, False, error_msg)
+                return False
+            else:
+                # 如果result不是WxResponse对象，尝试其他方式判断
+                if result:
+                    logger.info(f"消息发送成功（非标准返回值）: {chat_name} - {message[:50]}...")
+                    self.message_sent.emit(chat_name, True, "发送成功")
+                    return True
+                else:
+                    error_msg = f"消息发送失败: 返回值为假值 {result}"
+                    logger.error(error_msg)
+                    self.message_sent.emit(chat_name, False, error_msg)
+                    return False
+
         except Exception as e:
-            error_msg = f"发送消息失败: {str(e)}"
+            error_msg = f"发送消息异常: {str(e)}"
             logger.error(error_msg)
             self.message_sent.emit(chat_name, False, error_msg)
             return False
@@ -447,6 +507,11 @@ class WxautoManager(BaseService, IWxautoManager):
                         result = wx_instance.AddListenChat(chat_name, self._message_callback)
                         time.sleep(0.5)  # 短暂等待确保添加完成
 
+                        # 保存Chat对象引用，用于后续直接发送消息
+                        if hasattr(result, 'SendMsg'):  # 确认返回的是Chat对象
+                            self._listen_chats[chat_name] = result
+                            logger.info(f"保存Chat对象引用: {chat_name}")
+
                         # 启动监听功能
                         wx_instance.StartListening()
                         logger.info(f"添加监听聊天成功并启动监听: {chat_name}, 结果: {result}")
@@ -485,6 +550,12 @@ class WxautoManager(BaseService, IWxautoManager):
                 with self._lock:
                     wx_instance.RemoveListenChat(chat_name)
                     time.sleep(0.3)  # 短暂等待确保移除完成
+
+                    # 清理保存的Chat对象引用
+                    if chat_name in self._listen_chats:
+                        del self._listen_chats[chat_name]
+                        logger.info(f"清理Chat对象引用: {chat_name}")
+
                     logger.info(f"移除监听聊天成功: {chat_name}")
                     return True
 
