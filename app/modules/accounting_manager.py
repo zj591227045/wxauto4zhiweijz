@@ -15,9 +15,10 @@ from dataclasses import dataclass
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from .base_interfaces import (
-    ConfigurableService, ServiceStatus, HealthStatus, ServiceInfo, 
+    ConfigurableService, ServiceStatus, HealthStatus, ServiceInfo,
     HealthCheckResult, IAccountingManager
 )
+from app.utils.unified_statistics import get_unified_statistics
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,9 @@ class AccountingManager(ConfigurableService, IAccountingManager):
         self._refresh_thread = None
         self._stop_refresh = threading.Event()
 
+        # 获取统一统计系统
+        self._unified_stats = get_unified_statistics()
+
         # 统计信息
         self._stats = {
             'total_requests': 0,
@@ -82,7 +86,17 @@ class AccountingManager(ConfigurableService, IAccountingManager):
         }
 
         logger.info("记账管理器初始化完成")
-    
+
+    def _is_irrelevant_message(self, formatted_message: str) -> bool:
+        """判断是否为无关消息"""
+        irrelevant_keywords = [
+            "信息与记账无关",
+            "与记账无关",
+            "无关消息",
+            "不是记账信息"
+        ]
+        return any(keyword in formatted_message for keyword in irrelevant_keywords)
+
     def start(self) -> bool:
         """启动服务"""
         try:
@@ -415,6 +429,17 @@ class AccountingManager(ConfigurableService, IAccountingManager):
                     result = response.json()
                     success_msg = self._parse_accounting_response(result)
 
+                    # 判断是否为无关消息
+                    is_irrelevant = self._is_irrelevant_message(success_msg)
+
+                    # 在统一统计系统中记录结果（核心计数时间点）
+                    self._unified_stats.record_accounting_result(
+                        chat_name="global",  # 暂时使用全局统计
+                        success=True,
+                        formatted_message=success_msg,
+                        is_irrelevant=is_irrelevant
+                    )
+
                     self._stats['successful_requests'] += 1
                     logger.info("智能记账成功")
                     self.accounting_completed.emit(True, success_msg, result)
@@ -429,6 +454,14 @@ class AccountingManager(ConfigurableService, IAccountingManager):
 
                         # 如果是"消息与记账无关"，这是正常的业务逻辑
                         if '消息与记账无关' in error_info or '记账无关' in error_info:
+                            # 在统一统计系统中记录无关消息
+                            self._unified_stats.record_accounting_result(
+                                chat_name="global",
+                                success=True,
+                                formatted_message="信息与记账无关",
+                                is_irrelevant=True
+                            )
+
                             self._stats['successful_requests'] += 1
                             logger.info("消息与记账无关，跳过处理")
                             self.accounting_completed.emit(True, "信息与记账无关", error_result)
@@ -437,11 +470,29 @@ class AccountingManager(ConfigurableService, IAccountingManager):
                         # 其他400错误
                         elif error_msg:
                             self._stats['failed_requests'] += 1
+
+                            # 在统一统计系统中记录失败结果
+                            self._unified_stats.record_accounting_result(
+                                chat_name="global",
+                                success=False,
+                                formatted_message=f"记账失败: {error_msg}",
+                                is_irrelevant=False
+                            )
+
                             logger.warning(f"记账请求被拒绝: {error_msg}")
                             self.accounting_completed.emit(False, f"记账失败: {error_msg}", error_result)
                             return False, f"记账失败: {error_msg}"
                         else:
                             self._stats['failed_requests'] += 1
+
+                            # 在统一统计系统中记录失败结果
+                            self._unified_stats.record_accounting_result(
+                                chat_name="global",
+                                success=False,
+                                formatted_message="记账请求格式错误",
+                                is_irrelevant=False
+                            )
+
                             logger.warning(f"记账请求返回400: {response.text}")
                             self.accounting_completed.emit(False, "记账请求格式错误", error_result)
                             return False, "记账请求格式错误"
@@ -459,12 +510,30 @@ class AccountingManager(ConfigurableService, IAccountingManager):
         except requests.exceptions.RequestException as e:
             self._stats['failed_requests'] += 1
             error_msg = f"网络请求失败: {str(e)}"
+
+            # 在统一统计系统中记录失败结果
+            self._unified_stats.record_accounting_result(
+                chat_name="global",
+                success=False,
+                formatted_message=error_msg,
+                is_irrelevant=False
+            )
+
             logger.error(error_msg)
             self.accounting_completed.emit(False, error_msg, {})
             return False, error_msg
         except Exception as e:
             self._stats['failed_requests'] += 1
             error_msg = f"智能记账失败: {str(e)}"
+
+            # 在统一统计系统中记录失败结果
+            self._unified_stats.record_accounting_result(
+                chat_name="global",
+                success=False,
+                formatted_message=error_msg,
+                is_irrelevant=False
+            )
+
             logger.error(error_msg)
             self.accounting_completed.emit(False, error_msg, {})
             return False, error_msg

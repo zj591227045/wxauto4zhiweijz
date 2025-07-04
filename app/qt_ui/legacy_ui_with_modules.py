@@ -35,6 +35,9 @@ from app.qt_ui.enhanced_ui_components import (EnhancedCircularButton, EnhancedSt
 # 导入日志窗口
 from app.qt_ui.enhanced_log_window import EnhancedLogWindow
 
+# 导入统一统计系统
+from app.utils.unified_statistics import get_unified_statistics
+
 logger = logging.getLogger(__name__)
 
 
@@ -843,9 +846,54 @@ class LegacyMainWindow(QMainWindow):
         self.init_ui()
         self.setup_connections()
         self.start_modules()
-        
+
+        # 加载统一统计数据
+        self.load_unified_statistics()
+
         logger.info("旧版UI主窗口初始化完成（使用新模块化架构）")
-    
+
+    def load_unified_statistics(self):
+        """从统一统计系统加载初始统计数据"""
+        try:
+            # 获取统一统计系统
+            unified_stats = get_unified_statistics()
+            stats = unified_stats.get_statistics()
+
+            # 更新本地统计数据
+            self.stats['total_processed'] = stats.total_processed
+            self.stats['successful_accounting'] = stats.accounting_success
+            self.stats['failed_accounting'] = stats.accounting_failed
+            self.stats['irrelevant_messages'] = stats.accounting_irrelevant
+
+            # 更新UI显示
+            self.update_stats_display()
+
+            logger.info(f"加载统一统计数据: 处理={stats.total_processed}, 成功={stats.accounting_success}, 失败={stats.accounting_failed}, 无关={stats.accounting_irrelevant}")
+
+        except Exception as e:
+            logger.error(f"加载统一统计数据失败: {e}")
+
+    def refresh_stats_from_unified_system(self):
+        """从统一统计系统刷新统计数据"""
+        try:
+            # 获取统一统计系统
+            unified_stats = get_unified_statistics()
+            stats = unified_stats.get_statistics()
+
+            # 更新本地统计数据
+            self.stats['total_processed'] = stats.total_processed
+            self.stats['successful_accounting'] = stats.accounting_success
+            self.stats['failed_accounting'] = stats.accounting_failed
+            self.stats['irrelevant_messages'] = stats.accounting_irrelevant
+
+            # 更新UI显示
+            self.update_stats_display()
+
+            logger.debug(f"刷新统计数据: 处理={stats.total_processed}, 成功={stats.accounting_success}, 失败={stats.accounting_failed}, 无关={stats.accounting_irrelevant}")
+
+        except Exception as e:
+            logger.error(f"刷新统计数据失败: {e}")
+
     def init_modules(self):
         """初始化所有模块"""
         try:
@@ -1179,12 +1227,9 @@ class LegacyMainWindow(QMainWindow):
 
     def on_accounting_completed(self, success, message, data):
         """记账完成"""
-        if success:
-            self.stats['successful_accounting'] += 1
-        else:
-            self.stats['failed_accounting'] += 1
-
-        self.update_stats_display()
+        # 不再使用本地计数器，直接从统一统计系统获取最新数据
+        self.refresh_stats_from_unified_system()
+        logger.info(f"记账完成，统计已更新: 成功={success}")
 
     def on_monitoring_started(self, chat_names):
         """监控开始"""
@@ -1198,13 +1243,9 @@ class LegacyMainWindow(QMainWindow):
 
     def on_stats_updated(self, chat_name, stats):
         """统计更新"""
-        # 更新总体统计
-        self.stats['total_processed'] = stats.get('total_processed', 0)
-        self.stats['successful_accounting'] = stats.get('successful_accounting', 0)
-        self.stats['failed_accounting'] = stats.get('failed_accounting', 0)
-        self.stats['irrelevant_messages'] = stats.get('irrelevant_messages', 0)
-
-        self.update_stats_display()
+        # 不再使用外部传入的统计数据，直接从统一统计系统获取最新数据
+        self.refresh_stats_from_unified_system()
+        logger.info(f"收到统计更新信号: {chat_name}, 已刷新统计数据")
 
     def on_wxauto_initialized(self, success, message, info):
         """wxauto初始化结果"""
@@ -1250,13 +1291,9 @@ class LegacyMainWindow(QMainWindow):
 
     def on_delivery_accounting_completed(self, chat_name, success, message, data):
         """投递记账完成"""
-        if success:
-            self.stats['successful_accounting'] += 1
-        else:
-            self.stats['failed_accounting'] += 1
-
-        self.stats['total_processed'] += 1
-        self.update_stats_display()
+        # 不再使用本地计数器，直接从统一统计系统获取最新数据
+        self.refresh_stats_from_unified_system()
+        logger.info(f"投递记账完成: {chat_name}, 成功={success}, 统计已更新")
 
     def on_wechat_reply_sent(self, chat_name, success, message):
         """微信回复发送结果"""

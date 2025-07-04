@@ -24,6 +24,8 @@ sys.path.insert(0, project_root)
 
 # 导入状态管理器
 from app.utils.state_manager import state_manager
+from app.utils.unified_statistics import get_unified_statistics
+from app.utils.message_processor_wrapper import get_message_processor_wrapper
 
 # 导入异步HTTP工具
 from app.utils.async_wechat_api import AsyncWechatAPI
@@ -1260,6 +1262,13 @@ class SimpleMainWindow(QMainWindow):
         state_manager.connect_signal('api_status', self.on_api_status_changed)
         state_manager.connect_signal('stats', self.on_stats_changed)
         state_manager.connect_signal('monitoring', self.on_monitoring_status_changed)
+
+        # 初始化消息处理器包装类
+        self.message_processor_wrapper = get_message_processor_wrapper()
+
+        # 连接统一统计系统的信号
+        unified_stats = get_unified_statistics()
+        unified_stats.statistics_updated.connect(self.on_unified_statistics_updated)
     
     def setup_timers(self):
         """设置定时器"""
@@ -1272,18 +1281,45 @@ class SimpleMainWindow(QMainWindow):
         """加载初始状态"""
         # 强制设置监听状态为False，确保程序启动时显示"开始监听"
         state_manager.update_monitoring_status(False)
-        
+
         # 加载各种状态
         self.on_accounting_service_changed(state_manager.get_accounting_service_status())
         self.on_wechat_status_changed(state_manager.get_wechat_status())
         self.on_api_status_changed(state_manager.get_api_status())
-        self.on_stats_changed(state_manager.get_stats())
-        
+
         # 确保监听状态初始为False，按钮显示为"开始监听"
         self.on_monitoring_status_changed(False)
-        
-        # 延迟加载真实统计数据（等待消息监控器初始化完成）
+
+        # 立即加载统一统计系统的数据，而不是使用状态管理器的空数据
+        self.load_unified_statistics()
+
+        # 延迟再次更新统计数据（确保数据正确）
         QTimer.singleShot(1000, self.update_real_statistics)
+
+    def load_unified_statistics(self):
+        """从统一统计系统加载初始统计数据"""
+        try:
+            # 获取统一统计系统
+            unified_stats = get_unified_statistics()
+            stats = unified_stats.get_statistics()
+
+            # 直接更新UI显示
+            self.processed_card.set_value(stats.total_processed)
+            self.success_card.set_value(stats.accounting_success)
+            self.failed_card.set_value(stats.accounting_failed)
+
+            print(f"加载统一统计数据: 处理={stats.total_processed}, 成功={stats.accounting_success}, 失败={stats.accounting_failed}")
+
+            # 同时更新状态管理器（保持一致性）
+            state_manager.set_state('stats', {
+                'processed_messages': stats.total_processed,
+                'successful_records': stats.accounting_success,
+                'failed_records': stats.accounting_failed,
+                'last_update_time': datetime.now().isoformat()
+            }, emit_signal=False)  # 不发射信号，避免循环更新
+
+        except Exception as e:
+            print(f"加载统一统计数据失败: {e}")
 
     def on_async_wechat_initialized(self, success: bool, message: str, data: dict):
         """异步微信初始化完成回调"""
@@ -1478,6 +1514,24 @@ class SimpleMainWindow(QMainWindow):
         self.processed_card.set_value(stats.get('processed_messages', 0))
         self.success_card.set_value(stats.get('successful_records', 0))
         self.failed_card.set_value(stats.get('failed_records', 0))
+
+    def on_unified_statistics_updated(self, stats_dict: dict):
+        """统一统计系统数据更新回调"""
+        try:
+            # 直接使用统一统计系统的数据更新UI
+            total_processed = stats_dict.get('total_processed', 0)
+            accounting_success = stats_dict.get('accounting_success', 0)
+            accounting_failed = stats_dict.get('accounting_failed', 0)
+
+            # 更新UI显示
+            self.processed_card.set_value(total_processed)
+            self.success_card.set_value(accounting_success)
+            self.failed_card.set_value(accounting_failed)
+
+            print(f"统一统计更新UI: 处理={total_processed}, 成功={accounting_success}, 失败={accounting_failed}")
+
+        except Exception as e:
+            print(f"处理统一统计更新失败: {e}")
     
     def on_monitoring_status_changed(self, is_active: bool):
         """监控状态变化"""
@@ -2156,50 +2210,34 @@ class SimpleMainWindow(QMainWindow):
             print(f"更新状态失败: {e}")
     
     def update_real_statistics(self):
-        """从数据库更新真实的统计数据"""
+        """从统一统计系统更新真实的统计数据"""
         try:
-            # 检查是否有消息监控器
-            if not hasattr(self, 'message_monitor') or not self.message_monitor:
-                return
-            
-            # 检查消息监控器是否有消息处理器
-            if not hasattr(self.message_monitor, 'message_processor') or not self.message_monitor.message_processor:
-                return
-            
-            message_processor = self.message_monitor.message_processor
-            
-            # 获取所有聊天目标的统计信息
-            total_processed = 0
-            total_success = 0
-            total_failed = 0
-            
-            # 获取所有聊天目标（简化版本）
-            chat_targets = self.message_monitor.monitored_chats
-            if not chat_targets:
-                # 如果没有聊天目标，使用默认的
-                chat_targets = ["张杰"]
-            
-            for chat_target in chat_targets:
-                try:
-                    # 获取该聊天目标的统计信息
-                    stats = message_processor.get_processing_statistics(chat_target)
-                    
-                    # 累加统计数据 - 使用正确的字段名
-                    total_processed += stats.get('total_processed', 0)
-                    total_success += stats.get('accounting_success', 0)  # 记账成功数
-                    total_failed += stats.get('accounting_failed', 0)    # 记账失败数
-                    
-                    print(f"聊天 {chat_target} 统计: 总处理={stats.get('total_processed', 0)}, 记账成功={stats.get('accounting_success', 0)}, 记账失败={stats.get('accounting_failed', 0)}, 无关消息={stats.get('accounting_nothing', 0)}")
-                    
-                except Exception as e:
-                    print(f"获取 {chat_target} 统计信息失败: {e}")
-                    continue
-            
+            # 使用消息处理器包装类获取统计数据
+            if hasattr(self, 'message_processor_wrapper'):
+                # 获取全局统计数据
+                stats = self.message_processor_wrapper.get_global_statistics()
+
+                total_processed = stats.total_processed
+                total_success = stats.accounting_success
+                total_failed = stats.accounting_failed
+
+                print(f"统一统计数据: 总处理={total_processed}, 记账成功={total_success}, 记账失败={total_failed}, 无关消息={stats.accounting_irrelevant}")
+            else:
+                # 回退到直接使用统一统计系统
+                unified_stats = get_unified_statistics()
+                stats = unified_stats.get_statistics()
+
+                total_processed = stats.total_processed
+                total_success = stats.accounting_success
+                total_failed = stats.accounting_failed
+
+                print(f"直接统计数据: 总处理={total_processed}, 记账成功={total_success}, 记账失败={total_failed}, 无关消息={stats.accounting_irrelevant}")
+
             # 更新UI显示
             self.processed_card.set_value(total_processed)
             self.success_card.set_value(total_success)
             self.failed_card.set_value(total_failed)
-            
+
             # 同时更新状态管理器（保持一致性）
             state_manager.set_state('stats', {
                 'processed_messages': total_processed,
@@ -2212,7 +2250,7 @@ class SimpleMainWindow(QMainWindow):
             if not hasattr(self, '_last_stats') or self._last_stats != (total_processed, total_success, total_failed):
                 print(f"统计数据更新: 处理={total_processed}, 成功={total_success}, 失败={total_failed}")
                 self._last_stats = (total_processed, total_success, total_failed)
-            
+
         except Exception as e:
             print(f"更新真实统计数据失败: {e}")
     
@@ -2500,7 +2538,12 @@ class SimpleMainWindow(QMainWindow):
         """消息接收回调"""
         try:
             print(f"收到消息: {chat_name}: {message_content[:50]}...")
-            # 更新统计信息
+
+            # 使用统一统计系统记录消息处理
+            unified_stats = get_unified_statistics()
+            unified_stats.record_message_processed(chat_name, message_content)
+
+            # 同时更新状态管理器（保持兼容性）
             stats = state_manager.get_stats()
             stats['processed_messages'] = stats.get('processed_messages', 0) + 1
             state_manager.update_stats(**stats)

@@ -13,9 +13,10 @@ from enum import Enum
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from .base_interfaces import (
-    BaseService, ServiceStatus, HealthStatus, ServiceInfo, 
+    BaseService, ServiceStatus, HealthStatus, ServiceInfo,
     HealthCheckResult, IMessageDelivery
 )
+from app.utils.unified_statistics import get_unified_statistics
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +101,10 @@ class MessageDelivery(BaseService, IMessageDelivery):
             'reply_failed': 0,
             'queue_overflow': 0
         }
-        
+
+        # 获取统一统计系统
+        self._unified_stats = get_unified_statistics()
+
         logger.info("消息投递服务初始化完成")
     
     def start(self) -> bool:
@@ -292,6 +296,9 @@ class MessageDelivery(BaseService, IMessageDelivery):
     def process_message(self, chat_name: str, message_content: str, sender_name: str) -> Tuple[bool, str]:
         """处理消息"""
         try:
+            # 记录消息被处理（统一统计系统）
+            self._unified_stats.record_message_processed(chat_name, message_content)
+
             # 创建记账任务
             task_id = self._generate_task_id()
             task = DeliveryTask(
@@ -301,14 +308,14 @@ class MessageDelivery(BaseService, IMessageDelivery):
                 message_content=message_content,
                 sender_name=sender_name
             )
-            
+
             # 添加到队列
             if self._add_task_to_queue(task):
                 logger.info(f"消息已加入处理队列: {chat_name} - {message_content[:50]}...")
                 return True, f"任务已创建: {task_id}"
             else:
                 return False, "队列已满，无法处理消息"
-                
+
         except Exception as e:
             error_msg = f"处理消息失败: {str(e)}"
             logger.error(error_msg)
