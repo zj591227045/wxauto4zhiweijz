@@ -35,6 +35,7 @@ share/python-wheels/
 *.egg
 wxautox-3.9.11.17.25b48-cp311-cp311-win_amd64.whl
 MANIFEST
+release/
 
 
 # PyInstaller
