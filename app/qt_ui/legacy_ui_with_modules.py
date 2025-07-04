@@ -1401,16 +1401,29 @@ class LegacyMainWindow(QMainWindow):
                 QMessageBox.warning(self, "警告", "微信服务未连接")
                 return False
 
-            # 启动消息监听
-            if self.message_listener:
-                if not self.message_listener.start_listening(self.monitored_chats):
-                    QMessageBox.warning(self, "错误", "启动消息监听失败")
-                    return False
+            # 首先确保微信服务管理器有正确的监控聊天列表
+            if self.wechat_service_manager:
+                # 清除现有的监控聊天列表，避免重复
+                current_chats = self.wechat_service_manager.get_monitored_chats()
+                for chat in current_chats:
+                    self.wechat_service_manager.remove_chat(chat)
 
-            # 启动微信服务监控
+                # 添加新的监控聊天列表
+                for chat_name in self.monitored_chats:
+                    self.wechat_service_manager.add_chat(chat_name)
+
+            # 启动微信服务监控（这会添加监听对象到wxauto_manager）
             if self.wechat_service_manager:
                 if not self.wechat_service_manager.start_monitoring():
                     QMessageBox.warning(self, "错误", "启动微信服务监控失败")
+                    return False
+
+            # 启动消息监听器（但不重复添加监听对象）
+            # 注意：监听对象已经在wechat_service_manager.start_monitoring()中添加到wxauto_manager了
+            # 这里只需要启动消息监听器的监听循环，不需要重复添加监听对象
+            if self.message_listener:
+                if not self.message_listener.start_listening_loop_only(self.monitored_chats):
+                    QMessageBox.warning(self, "错误", "启动消息监听循环失败")
                     return False
 
             logger.info("监控启动成功")

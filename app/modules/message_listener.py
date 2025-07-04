@@ -360,6 +360,42 @@ class MessageListener(BaseService, IMessageListener):
         """检查是否正在监听"""
         return self._is_listening
 
+    def start_listening_loop_only(self, chat_names: List[str]) -> bool:
+        """仅启动监听循环，不添加监听对象（假设监听对象已经在其他地方添加）"""
+        try:
+            with self._lock:
+                if self._is_listening:
+                    logger.warning("消息监听已在运行")
+                    return True
+
+                if not chat_names:
+                    logger.error("无监听目标")
+                    return False
+
+                if not self.wxauto_manager or not self.wxauto_manager.is_connected():
+                    logger.error("wxauto管理器未连接")
+                    return False
+
+                # 设置监听目标（但不调用add_listen_chat）
+                self._monitored_chats = chat_names.copy()
+
+                # 启动监听线程
+                self._stop_listening.clear()
+                self._listen_thread = threading.Thread(target=self._listen_loop, daemon=True)
+                self._listen_thread.start()
+
+                self._is_listening = True
+                self._stats['start_time'] = time.time()
+
+                logger.info(f"开始监听循环 {len(self._monitored_chats)} 个聊天（监听对象已在其他地方添加）")
+                self.listening_started.emit(self._monitored_chats.copy())
+                return True
+
+        except Exception as e:
+            logger.error(f"启动监听循环失败: {e}")
+            self.error_occurred.emit(f"启动监听循环失败: {str(e)}")
+            return False
+
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""
         with self._lock:
