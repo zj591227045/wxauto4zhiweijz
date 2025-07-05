@@ -35,7 +35,7 @@ def create_spec_file():
 block_cipher = None
 
 a = Analysis(
-    ['start_legacy_ui.py'],
+    ['start_ui.py'],
     pathex=[],
     binaries=[],
     datas=[
