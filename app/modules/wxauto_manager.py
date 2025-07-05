@@ -333,38 +333,84 @@ class WxautoManager(BaseService, IWxautoManager):
                 result = wx_instance.SendMsg(message, chat_name)
                 logger.info(f"SendMsg调用完成: 目标='{chat_name}', 返回结果={result} (类型: {type(result)})")
 
-            # 检查发送结果
-            if result is None:
-                # 如果返回None，可能是旧版本的wxauto，尝试不检查返回值
-                logger.warning("SendMsg返回None，可能是旧版本wxauto，假设发送成功")
-                self.message_sent.emit(chat_name, True, "发送成功（未验证）")
-                return True
-            elif hasattr(result, 'is_success') and result.is_success:
-                logger.info(f"消息发送成功: {chat_name} - {message[:50]}...")
+            # 增强的发送结果检查
+            success, error_msg = self._check_send_result(result, chat_name, message)
+
+            if success:
                 self.message_sent.emit(chat_name, True, "发送成功")
                 return True
-            elif hasattr(result, 'is_success') and not result.is_success:
-                error_msg = f"消息发送失败: {result.get('message', '未知错误')}"
-                logger.error(error_msg)
+            else:
+                logger.error(f"消息发送失败: {chat_name} - {error_msg}")
                 self.message_sent.emit(chat_name, False, error_msg)
                 return False
-            else:
-                # 如果result不是WxResponse对象，尝试其他方式判断
-                if result:
-                    logger.info(f"消息发送成功（非标准返回值）: {chat_name} - {message[:50]}...")
-                    self.message_sent.emit(chat_name, True, "发送成功")
-                    return True
-                else:
-                    error_msg = f"消息发送失败: 返回值为假值 {result}"
-                    logger.error(error_msg)
-                    self.message_sent.emit(chat_name, False, error_msg)
-                    return False
 
         except Exception as e:
             error_msg = f"发送消息异常: {str(e)}"
             logger.error(error_msg)
             self.message_sent.emit(chat_name, False, error_msg)
             return False
+
+    def _check_send_result(self, result, chat_name: str, message: str) -> tuple[bool, str]:
+        """增强的发送结果检查"""
+        try:
+            # 详细记录返回结果信息
+            logger.debug(f"发送结果详情: chat={chat_name}, result={result}, type={type(result)}")
+
+            # 情况1: 返回None（可能是旧版本wxauto）
+            if result is None:
+                logger.warning(f"SendMsg返回None: {chat_name} - 可能是旧版本wxauto")
+                # 尝试通过其他方式验证发送是否成功
+                return self._verify_message_sent(chat_name, message)
+
+            # 情况2: 标准WxResponse对象
+            elif hasattr(result, 'is_success'):
+                if result.is_success:
+                    logger.info(f"消息发送成功: {chat_name} - {message[:50]}...")
+                    return True, "发送成功"
+                else:
+                    error_detail = getattr(result, 'message', '未知错误')
+                    error_msg = f"wxauto返回失败: {error_detail}"
+                    return False, error_msg
+
+            # 情况3: 字典格式返回值
+            elif isinstance(result, dict):
+                if result.get('status') == '成功' or result.get('success', False):
+                    logger.info(f"消息发送成功（字典格式）: {chat_name} - {message[:50]}...")
+                    return True, "发送成功"
+                else:
+                    error_msg = f"字典返回失败: {result.get('message', result)}"
+                    return False, error_msg
+
+            # 情况4: 布尔值或其他类型
+            elif isinstance(result, bool):
+                if result:
+                    logger.info(f"消息发送成功（布尔值）: {chat_name} - {message[:50]}...")
+                    return True, "发送成功"
+                else:
+                    return False, "返回False"
+
+            # 情况5: 其他真值/假值
+            else:
+                if result:
+                    logger.info(f"消息发送成功（真值）: {chat_name} - {message[:50]}...")
+                    return True, f"发送成功（返回值: {result}）"
+                else:
+                    return False, f"返回假值: {result}"
+
+        except Exception as e:
+            logger.error(f"检查发送结果时异常: {e}")
+            return False, f"结果检查异常: {str(e)}"
+
+    def _verify_message_sent(self, chat_name: str, message: str) -> tuple[bool, str]:
+        """当返回值不明确时，尝试验证消息是否真的发送成功"""
+        try:
+            # 简单的验证策略：假设发送成功，但记录警告
+            # 在实际应用中，可以通过检查聊天记录等方式进一步验证
+            logger.warning(f"无法确定发送状态，假设成功: {chat_name}")
+            return True, "发送成功（未验证）"
+        except Exception as e:
+            logger.error(f"验证消息发送状态时异常: {e}")
+            return False, f"验证异常: {str(e)}"
     
     def get_messages(self, chat_name: str) -> List[Dict[str, Any]]:
         """获取消息 - 按照旧版实现方式"""

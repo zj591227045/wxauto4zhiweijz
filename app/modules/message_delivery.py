@@ -88,7 +88,12 @@ class MessageDelivery(BaseService, IMessageDelivery):
         self._auto_reply_enabled = True
         self._reply_template = ""
         self._max_queue_size = 1000
-        self._task_timeout = 60  # 任务超时时间（秒）
+        # 不同类型任务的超时时间（秒）
+        self._task_timeouts = {
+            DeliveryTaskType.ACCOUNTING: 120,  # 记账任务：2分钟
+            DeliveryTaskType.WECHAT_REPLY: 180  # 微信回复任务：3分钟（考虑重试时间）
+        }
+        self._default_task_timeout = 60  # 默认超时时间
         
         # 统计信息
         self._stats = {
@@ -218,12 +223,14 @@ class MessageDelivery(BaseService, IMessageDelivery):
             queue_size = self._task_queue.qsize()
             processing_count = len(self._processing_tasks)
             
-            # 检查任务超时
+            # 检查任务超时（使用不同类型任务的超时时间）
             current_time = time.time()
             timeout_tasks = []
             for task_id, task in self._processing_tasks.items():
-                if current_time - task.created_time > self._task_timeout:
-                    timeout_tasks.append(task_id)
+                # 获取该任务类型的超时时间
+                task_timeout = self._task_timeouts.get(task.task_type, self._default_task_timeout)
+                if current_time - task.created_time > task_timeout:
+                    timeout_tasks.append((task_id, task.task_type, task_timeout))
             
             # 判断健康状态
             issues = []
@@ -243,7 +250,36 @@ class MessageDelivery(BaseService, IMessageDelivery):
                 issues.append(f"队列接近满载: {queue_size}/{self._max_queue_size}")
             
             if timeout_tasks:
-                issues.append(f"{len(timeout_tasks)}个任务超时")
+                # 记录超时任务的详细信息
+                timeout_details = []
+                task_details = []
+                for task_id, task_type, timeout_limit in timeout_tasks:
+                    timeout_details.append(f"{task_type.value}({timeout_limit}s)")
+
+                    # 获取任务详细信息
+                    task = self._processing_tasks.get(task_id)
+                    if task:
+                        task_info = f"ID:{task_id[:8]}, 类型:{task_type.value}, 聊天:{task.chat_name}, 创建时间:{time.strftime('%H:%M:%S', time.localtime(task.created_time))}"
+                        if task.task_type == DeliveryTaskType.WECHAT_REPLY:
+                            task_info += f", 回复内容:{task.reply_message[:30]}..."
+                        elif task.task_type == DeliveryTaskType.ACCOUNTING:
+                            task_info += f", 消息内容:{task.message_content[:30]}..."
+                        task_details.append(task_info)
+
+                        logger.warning(f"任务超时详情: {task_info}, 超时限制: {timeout_limit}秒")
+                    else:
+                        logger.warning(f"任务超时: {task_id} - 类型: {task_type.value}, 超时限制: {timeout_limit}秒")
+
+                issues.append(f"{len(timeout_tasks)}个任务超时: {', '.join(timeout_details)}")
+
+                # 在健康检查结果中包含任务明细
+                if hasattr(self, '_last_timeout_details'):
+                    self._last_timeout_details = task_details
+                else:
+                    self._last_timeout_details = task_details
+
+                # 清理超时任务（避免内存泄漏）
+                self._cleanup_timeout_tasks(timeout_tasks)
             
             # 计算错误率
             total_tasks = self._stats['completed_tasks'] + self._stats['failed_tasks']
@@ -261,6 +297,9 @@ class MessageDelivery(BaseService, IMessageDelivery):
             elif issues:
                 status = HealthStatus.DEGRADED
                 message = "; ".join(issues)
+                # 如果有超时任务，添加详细信息到消息中
+                if hasattr(self, '_last_timeout_details') and self._last_timeout_details:
+                    message += f" | 超时任务明细: {len(self._last_timeout_details)}个任务"
             else:
                 status = HealthStatus.HEALTHY
                 message = "消息投递服务运行正常"
@@ -370,12 +409,45 @@ class MessageDelivery(BaseService, IMessageDelivery):
         """获取统计信息"""
         return self._stats.copy()
 
+    def get_timeout_task_details(self) -> List[str]:
+        """获取超时任务的详细信息"""
+        return getattr(self, '_last_timeout_details', [])
+
     # 私有方法
 
     def _generate_task_id(self) -> str:
         """生成任务ID"""
         import uuid
         return str(uuid.uuid4())[:8]
+
+    def _cleanup_timeout_tasks(self, timeout_tasks):
+        """清理超时任务"""
+        try:
+            with self._lock:
+                for task_id, task_type, timeout_limit in timeout_tasks:
+                    if task_id in self._processing_tasks:
+                        task = self._processing_tasks.pop(task_id)
+                        logger.info(f"清理超时任务: {task_id} - 类型: {task_type.value}")
+
+                        # 更新统计
+                        self._stats['failed_tasks'] += 1
+
+                        # 发出任务失败信号
+                        self.task_completed.emit(
+                            task_id,
+                            False,
+                            f"任务超时 ({timeout_limit}秒)",
+                            {'timeout': True, 'task_type': task_type.value}
+                        )
+
+            # 发出队列状态变化信号
+            self.queue_status_changed.emit(
+                self._task_queue.qsize(),
+                len(self._processing_tasks)
+            )
+
+        except Exception as e:
+            logger.error(f"清理超时任务失败: {e}")
 
     def _add_task_to_queue(self, task: DeliveryTask) -> bool:
         """添加任务到队列"""
@@ -581,51 +653,91 @@ class MessageDelivery(BaseService, IMessageDelivery):
             )
 
     def _process_reply_task(self, task: DeliveryTask) -> DeliveryResult:
-        """处理回复任务"""
-        try:
-            # 发送微信回复
-            success = self.wxauto_manager.send_message(
-                task.chat_name,
-                task.reply_message
-            )
+        """处理回复任务（带重试机制）"""
+        import time
 
-            if success:
-                self._stats['reply_success'] += 1
-                message = "回复发送成功"
-            else:
-                self._stats['reply_failed'] += 1
-                message = "回复发送失败"
+        last_error = None
+        retry_delays = [1, 2, 5]  # 重试间隔：1秒、2秒、5秒
 
-            # 发出回复发送信号
-            self.wechat_reply_sent.emit(
-                task.chat_name,
-                success,
-                message
-            )
+        for attempt in range(task.max_retries + 1):  # 包括初次尝试
+            try:
+                logger.info(f"尝试发送回复 (第{attempt + 1}次): {task.chat_name} - {task.reply_message[:50]}...")
 
-            return DeliveryResult(
-                task_id=task.task_id,
-                success=success,
-                message=message,
-                data={'reply_message': task.reply_message}
-            )
+                # 发送微信回复
+                success = self.wxauto_manager.send_message(
+                    task.chat_name,
+                    task.reply_message
+                )
 
-        except Exception as e:
-            self._stats['reply_failed'] += 1
-            error_msg = f"回复任务处理异常: {str(e)}"
+                if success:
+                    self._stats['reply_success'] += 1
+                    message = f"回复发送成功 (尝试{attempt + 1}次)"
+                    if attempt > 0:
+                        logger.info(f"重试成功: {task.chat_name} - 第{attempt + 1}次尝试成功")
 
-            # 发出回复失败信号
-            self.wechat_reply_sent.emit(
-                task.chat_name,
-                False,
-                error_msg
-            )
+                    # 发出回复发送信号
+                    self.wechat_reply_sent.emit(
+                        task.chat_name,
+                        True,
+                        message
+                    )
 
-            return DeliveryResult(
-                task_id=task.task_id,
-                success=False,
-                message=error_msg
-            )
+                    return DeliveryResult(
+                        task_id=task.task_id,
+                        success=True,
+                        message=message,
+                        data={
+                            'reply_message': task.reply_message,
+                            'attempts': attempt + 1
+                        }
+                    )
+                else:
+                    # 发送失败，准备重试
+                    error_msg = f"回复发送失败 (尝试{attempt + 1}次)"
+                    logger.warning(f"{error_msg}: {task.chat_name}")
+                    last_error = error_msg
+
+                    # 如果还有重试机会，等待后重试
+                    if attempt < task.max_retries:
+                        delay = retry_delays[min(attempt, len(retry_delays) - 1)]
+                        logger.info(f"等待{delay}秒后重试发送回复: {task.chat_name}")
+                        time.sleep(delay)
+                        continue
+
+            except Exception as e:
+                error_msg = f"回复任务处理异常 (尝试{attempt + 1}次): {str(e)}"
+                logger.warning(f"{error_msg}: {task.chat_name}")
+                last_error = error_msg
+
+                # 如果还有重试机会，等待后重试
+                if attempt < task.max_retries:
+                    delay = retry_delays[min(attempt, len(retry_delays) - 1)]
+                    logger.info(f"等待{delay}秒后重试发送回复: {task.chat_name}")
+                    time.sleep(delay)
+                    continue
+
+        # 所有重试都失败了
+        self._stats['reply_failed'] += 1
+        final_error = f"回复发送失败，已重试{task.max_retries}次: {last_error}"
+        logger.error(f"{final_error}: {task.chat_name}")
+
+        # 发出回复失败信号
+        self.wechat_reply_sent.emit(
+            task.chat_name,
+            False,
+            final_error
+        )
+
+        return DeliveryResult(
+            task_id=task.task_id,
+            success=False,
+            message=final_error,
+            data={
+                'reply_message': task.reply_message,
+                'attempts': task.max_retries + 1,
+                'last_error': last_error
+            }
+        )
 
     def _should_send_reply(self, accounting_result: str) -> bool:
         """

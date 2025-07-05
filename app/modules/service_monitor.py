@@ -52,12 +52,11 @@ class ServiceRecord:
             return 0.0
         return ((self.total_checks - self.total_failures) / self.total_checks) * 100
     
-    @property
-    def is_in_recovery_cooldown(self) -> bool:
+    def is_in_recovery_cooldown(self, cooldown_seconds: int = 300) -> bool:
         """是否在恢复冷却期"""
         if not self.last_recovery_time:
             return False
-        return datetime.now() - self.last_recovery_time < timedelta(seconds=300)
+        return datetime.now() - self.last_recovery_time < timedelta(seconds=cooldown_seconds)
 
 
 class ServiceMonitor(BaseService, IServiceMonitor):
@@ -377,7 +376,7 @@ class ServiceMonitor(BaseService, IServiceMonitor):
                     'total_checks': record.total_checks,
                     'total_failures': record.total_failures,
                     'success_rate': record.success_rate,
-                    'is_in_recovery_cooldown': record.is_in_recovery_cooldown
+                    'is_in_recovery_cooldown': record.is_in_recovery_cooldown()
                 }
             return None
 
@@ -535,19 +534,36 @@ class ServiceMonitor(BaseService, IServiceMonitor):
             elif result.status in [HealthStatus.DEGRADED, HealthStatus.UNHEALTHY]:
                 # 服务不健康
                 record.status = result.status
-                record.failure_count += 1
                 record.total_failures += 1
                 self._stats['total_failures'] += 1
 
-                logger.warning(f"服务健康检查失败 {service_name} ({record.failure_count}/{config.max_failures}): {result.message}")
+                # 控制失败计数器上限，避免无限增长
+                if record.failure_count < config.max_failures + 2:  # 允许超出2次用于观察
+                    record.failure_count += 1
+
+                # 根据失败类型和次数调整日志级别，减少噪音
+                if "任务超时" in result.message and record.failure_count <= 2:
+                    # 前两次任务超时使用INFO级别，减少日志噪音
+                    logger.info(f"服务健康检查失败 {service_name} ({record.failure_count}/{config.max_failures}): {result.message}")
+                elif record.failure_count > config.max_failures:
+                    # 超过最大失败次数后，降低日志频率
+                    if record.failure_count % 5 == 0:  # 每5次记录一次
+                        logger.error(f"服务持续不健康 {service_name} (已失败{record.failure_count}次): {result.message}")
+                elif record.failure_count >= config.max_failures - 1:
+                    # 接近最大失败次数时使用ERROR级别
+                    logger.error(f"服务健康检查失败 {service_name} ({record.failure_count}/{config.max_failures}): {result.message}")
+                else:
+                    # 其他情况使用WARNING级别
+                    logger.warning(f"服务健康检查失败 {service_name} ({record.failure_count}/{config.max_failures}): {result.message}")
 
                 # 检查是否需要触发恢复
-                if (record.failure_count >= config.max_failures and
+                if (record.failure_count == config.max_failures and  # 只在达到最大失败次数时触发一次
                     config.auto_recovery and
                     config.recovery_handler and
-                    not record.is_in_recovery_cooldown and
+                    not record.is_in_recovery_cooldown(config.recovery_cooldown) and
                     self._current_recoveries < self._max_concurrent_recoveries):
 
+                    logger.info(f"触发服务恢复: {service_name} (失败次数达到{config.max_failures})")
                     # 异步执行恢复
                     recovery_thread = threading.Thread(
                         target=self._attempt_recovery,
@@ -555,6 +571,10 @@ class ServiceMonitor(BaseService, IServiceMonitor):
                         daemon=True
                     )
                     recovery_thread.start()
+                elif record.failure_count == config.max_failures and not config.recovery_handler:
+                    logger.warning(f"服务 {service_name} 达到最大失败次数但无恢复处理器")
+                elif record.failure_count == config.max_failures and record.is_in_recovery_cooldown(config.recovery_cooldown):
+                    logger.info(f"服务 {service_name} 在恢复冷却期，跳过恢复")
 
             # 发出状态变化信号
             if old_status != record.status:
